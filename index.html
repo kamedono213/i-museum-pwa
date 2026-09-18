@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="ja" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#14102b">
+  <meta name="description" content="調べて知ったことが展示物になる、自分だけの知識博物館">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&display=swap">
+  <link rel="stylesheet" href="./styles.css">
+  <title>アイミュージアム</title>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-wrap">
+        <button id="homeButton" class="home-btn" type="button" title="トップに戻る" aria-label="トップに戻る">⌂</button>
+        <div class="brand-copy">
+          <div class="eyebrow">I MUSEUM</div>
+          <div class="app-title-row">
+            <input id="appTitleInput" class="app-title-input" type="text" value="アイミュージアム" maxlength="60" aria-label="データベース名">
+            <span class="title-edit-mark" aria-hidden="true">✎</span>
+          </div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="quizButton" class="icon-btn" type="button" title="?" aria-label="クイズ">？</button>
+        <button id="trashButton" class="icon-btn" type="button" title="ゴミ箱" aria-label="ゴミ箱">🗑</button>
+        <button id="accountButton" class="icon-btn" type="button" title="設定" aria-label="設定">⚙</button>
+      </div>
+    </header>
+
+    <main id="libraryView" class="view library-view">
+      <section class="search-row" aria-label="検索と並び替え">
+        <label class="search-box">
+          <span aria-hidden="true">⌕</span>
+          <input id="searchInput" type="search" placeholder="タイトル・本文・タグを検索" autocomplete="off">
+        </label>
+        <select id="sortSelect" aria-label="並び替え">
+          <option value="updated">更新が新しい</option>
+          <option value="created">作成が新しい</option>
+          <option value="title">タイトル順</option>
+          <option value="tag">タブ順</option>
+          <option value="favorite">お気に入り順</option>
+        </select>
+      </section>
+
+      <section class="quick-row" aria-label="件数表示">
+        <span id="resultCount" class="muted"></span>
+      </section>
+
+      <nav id="tagFilters" class="tag-strip" aria-label="タグ絞り込み"></nav>
+
+      <section id="noteList" class="note-list" aria-live="polite"></section>
+
+      <div id="emptyState" class="empty-state" hidden>
+        <div class="empty-icon">＋</div>
+        <strong>まだ知識がありません</strong>
+        <span>右下の＋から最初のメモを作れます。</span>
+      </div>
+
+      <button id="addButton" class="fab" type="button" aria-label="新規作成">＋</button>
+
+      <div id="selectionBar" class="selection-bar" hidden>
+        <span id="selectionCount">0件選択中</span>
+        <div class="selection-actions">
+          <button id="selectionTagButton" class="secondary-btn" type="button">タグ追加</button>
+          <button id="selectionDeleteButton" class="danger-btn" type="button">削除</button>
+          <button id="selectionCancelButton" class="icon-btn" type="button" aria-label="選択解除">×</button>
+        </div>
+      </div>
+
+      <div id="bulkTagDialog" class="bulk-tag-dialog" hidden>
+        <div class="bulk-tag-sheet">
+          <div class="bulk-tag-header">
+            <strong>選択した<span id="bulkTagTargetCount">0</span>件にタグを追加</strong>
+            <button id="bulkTagCloseButton" class="icon-btn" type="button" aria-label="閉じる">×</button>
+          </div>
+          <div id="bulkTagPicker" class="tag-strip tags-picker"></div>
+          <button id="bulkTagApplyButton" class="primary-btn" type="button">適用</button>
+        </div>
+      </div>
+    </main>
+
+    <main id="museumView" class="view museum-view" hidden aria-label="ミュージアム">
+      <section class="museum-hero">
+        <div class="star-field" aria-hidden="true"></div>
+        <div id="aiMascot" class="ai-mascot" role="button" tabindex="0" aria-label="アイに話しかける">
+          <div id="aiSpeechBubble" class="ai-speech-bubble" hidden></div>
+          <div class="ai-body">
+            <div class="ai-eye ai-eye-l"></div>
+            <div class="ai-eye ai-eye-r"></div>
+          </div>
+        </div>
+        <button id="dailyMissionButton" class="daily-mission-btn" type="button">
+          <span class="dm-label">きょうのミッション</span>
+          <span id="dailyMissionText" class="dm-text">タップして聞いてみる</span>
+        </button>
+      </section>
+
+      <section class="museum-shelf-section" aria-label="トロフィー棚">
+        <div class="museum-shelf-title">
+          <h2>トロフィー棚</h2>
+          <span id="museumTrophyCount" class="muted"></span>
+        </div>
+        <div id="trophyShelf" class="trophy-shelf"></div>
+        <div id="museumEmptyState" class="empty-state" hidden>
+          <div class="empty-icon">✦</div>
+          <strong>まだ展示物がありません</strong>
+          <span>「メモ」タブでタグをつけて知識を記録すると、ここにトロフィーが並びます。</span>
+        </div>
+      </section>
+    </main>
+
+    <nav class="tab-bar" aria-label="画面切り替え">
+      <button id="tabMemoButton" class="tab-btn is-active" type="button" data-tab="library">
+        <span class="tab-icon" aria-hidden="true">📝</span>
+        <span class="tab-label">メモ</span>
+      </button>
+      <button id="tabMuseumButton" class="tab-btn" type="button" data-tab="museum">
+        <span class="tab-icon" aria-hidden="true">🏛️</span>
+        <span class="tab-label">ミュージアム</span>
+        <span id="museumTabBadge" class="tab-badge" hidden></span>
+      </button>
+    </nav>
+
+    <dialog id="trophyDetailDialog" class="trophy-detail-dialog">
+      <form method="dialog" class="dialog-card trophy-detail-card">
+        <header class="dialog-header">
+          <div>
+            <div class="eyebrow" id="trophyDetailTier">TIER</div>
+            <h2 id="trophyDetailName">タグ名</h2>
+          </div>
+          <button class="icon-btn" value="cancel" aria-label="閉じる">×</button>
+        </header>
+        <div class="trophy-detail-visual">
+          <div id="trophyDetailIcon" class="trophy-icon-lg"></div>
+        </div>
+        <dl class="trophy-detail-stats">
+          <div><dt>知識の数</dt><dd id="trophyDetailCount">0件</dd></div>
+          <div><dt>はじめて記録した日</dt><dd id="trophyDetailFirstDate">-</dd></div>
+          <div><dt>次のランクまで</dt><dd id="trophyDetailNext">-</dd></div>
+        </dl>
+      </form>
+    </dialog>
+
+    <section id="editorView" class="view editor-view" hidden aria-label="知識を編集">
+      <header class="editor-header">
+        <button id="backButton" class="back-btn" type="button" aria-label="一覧に戻る">← 戻る</button>
+        <span id="saveState" class="save-state">保存済み</span>
+        <div class="editor-header-actions">
+          <button id="pinButton" class="icon-btn" type="button" aria-label="ピン留め">📌</button>
+          <button id="favoriteButton" class="icon-btn" type="button" aria-label="お気に入り">☆</button>
+        </div>
+      </header>
+
+      <div class="editor-scroll">
+        <input id="titleInput" class="title-input" type="text" placeholder="タイトル" maxlength="200">
+        <div id="tagsPicker" class="tag-strip tags-picker" aria-label="タグ選択"></div>
+
+        <textarea id="contentInput" class="content-input" placeholder="ここに内容を書きます。URLは一覧でも開けます。"></textarea>
+
+        <section class="editor-section">
+          <div class="section-title-row">
+            <h2>画像</h2>
+            <label class="small-btn file-btn">＋ 追加<input id="attachmentInput" type="file" accept="image/*" multiple hidden></label>
+          </div>
+          <div id="attachmentList" class="attachment-list"></div>
+        </section>
+
+        <section class="editor-section actions-grid">
+          <button id="deleteButton" class="danger-btn" type="button">ゴミ箱へ</button>
+        </section>
+      </div>
+    </section>
+
+    <section id="trashView" class="view trash-view" hidden aria-label="ゴミ箱">
+      <header class="sub-header">
+        <button id="trashBackButton" class="icon-btn" type="button" aria-label="一覧に戻る">‹</button>
+        <h2>ゴミ箱</h2>
+        <button id="trashEmptyAllButton" class="text-btn danger-text" type="button">すべて削除</button>
+      </header>
+      <div id="trashList" class="trash-list"></div>
+    </section>
+  </div>
+
+  <dialog id="settingsDialog" class="settings-dialog">
+    <form method="dialog" class="dialog-card">
+      <header class="dialog-header">
+        <div>
+          <div class="eyebrow">SETTINGS</div>
+          <h2>設定・バックアップ</h2>
+        </div>
+        <button class="icon-btn" value="cancel" aria-label="閉じる">×</button>
+      </header>
+
+      <label class="field-label" for="themeSelect">表示テーマ</label>
+      <select id="themeSelect" class="wide-select">
+        <option value="system">端末に合わせる</option>
+        <option value="light">ライト</option>
+        <option value="dark">ダーク</option>
+      </select>
+
+      <div class="settings-block">
+        <button id="replayTutorialButton" class="secondary-btn" type="button">使い方を見る</button>
+      </div>
+
+      <div class="settings-block">
+        <strong>バックアップ</strong>
+        <p class="muted">全メモ・タグ・画像・設定を1つのJSONファイルに保存します。</p>
+        <div class="backup-actions">
+          <button id="exportButton" class="primary-btn" type="button">書き出す</button>
+          <label class="secondary-btn file-btn">読み込む<input id="importInput" type="file" accept="application/json,.json" hidden></label>
+        </div>
+      </div>
+
+      <div class="privacy-note">データはこの端末のブラウザ内に保存されます。</div>
+    </form>
+  </dialog>
+
+
+  <dialog id="quickCaptureDialog" class="quick-capture-dialog" aria-labelledby="quickCaptureTitle">
+    <div class="quick-capture-sheet">
+      <div class="quick-capture-handle" aria-hidden="true"></div>
+      <header class="quick-capture-header">
+        <div>
+          <div class="eyebrow">QUICK CAPTURE</div>
+          <h2 id="quickCaptureTitle">すぐ追加</h2>
+        </div>
+        <button id="quickCancelButton" class="icon-btn" type="button" aria-label="閉じる">×</button>
+      </header>
+
+      <label class="quick-field">
+        <span>タイトル</span>
+        <input id="quickTitleInput" type="text" maxlength="200" placeholder="タイトル（あとでもOK）">
+      </label>
+      <label class="quick-field">
+        <span>タグ</span>
+        <input id="quickTagsInput" type="text" placeholder="生物, 雑学 など">
+      </label>
+      <label class="quick-field quick-field-content">
+        <span>内容</span>
+        <textarea id="quickContentInput" rows="6" placeholder="気になったことをすぐ保存"></textarea>
+      </label>
+
+      <div class="quick-capture-actions">
+        <button id="quickEditButton" class="secondary-btn" type="button">詳細編集</button>
+        <button id="quickSaveButton" class="primary-btn" type="button">保存</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="./src/app.js"></script>
+
+  <!--
+    初回起動時のチュートリアル。実際の画面要素をハイライトし、
+    ユーザーが実際にそのボタンを押して次に進む形式。
+    設定画面の「使い方を見る」からいつでも再生できる。
+  -->
+  <style>
+    .tutorial-spot {
+      position: fixed; z-index: 9998; pointer-events: none;
+      border-radius: 14px; box-shadow: 0 0 0 9999px rgba(10, 10, 10, 0.62);
+      transition: top .25s ease, left .25s ease, width .25s ease, height .25s ease;
+    }
+    .tutorial-tip {
+      position: fixed; z-index: 9999; max-width: 300px;
+      background: var(--surface, #fff); color: var(--text, #1c1c1c);
+      border-radius: 14px; padding: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+      font-size: 14px; line-height: 1.6;
+    }
+    .tutorial-tip.center {
+      left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 320px; text-align: center;
+    }
+    .tutorial-tip .tt-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+    .tutorial-tip button {
+      border: 0; border-radius: 999px; padding: 8px 16px; font-size: 13px; font-weight: 700;
+      background: #1c1c1c; color: #fff; cursor: pointer;
+    }
+    .tutorial-tip button.tt-skip { background: transparent; color: var(--muted, #888); padding: 8px 10px; }
+    .tutorial-tip .tt-hint { display: block; margin-top: 8px; font-size: 12px; color: var(--muted, #888); }
+    .tutorial-inline-tip {
+      background: var(--surface-2, #f0eee6); border-radius: 12px; padding: 12px 14px;
+      margin-top: 10px; font-size: 13px; line-height: 1.6;
+    }
+    .tutorial-inline-tip .tt-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+    .tutorial-inline-tip button {
+      border: 0; border-radius: 999px; padding: 7px 14px; font-size: 13px; font-weight: 700;
+      background: #1c1c1c; color: #fff; cursor: pointer;
+    }
+
+    .quiz-overlay {
+      position: fixed; inset: 0; z-index: 9997; background: rgba(10,10,10,0.55);
+      display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .quiz-card {
+      background: var(--surface, #fff); color: var(--text, #1c1c1c);
+      border-radius: 18px; padding: 22px; max-width: 340px; width: 100%;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.35);
+    }
+    .quiz-label { font-size: 12px; color: var(--muted, #888); font-weight: 700; }
+    .quiz-title { font-size: 20px; font-weight: 800; margin-top: 8px; line-height: 1.5; }
+    .quiz-content {
+      margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line, #ddd);
+      font-size: 14px; line-height: 1.7; white-space: pre-wrap;
+    }
+    .quiz-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    .quiz-actions .secondary-btn { background: transparent; border: 1px solid var(--line, #ddd); border-radius: 999px; padding: 8px 16px; }
+    .quiz-actions .primary-btn { background: #1c1c1c; color: #fff; border: 0; border-radius: 999px; padding: 8px 16px; font-weight: 700; }
+
+    .tag-chip-add { border: 1px dashed var(--line, #ccc); background: transparent; color: var(--muted, #888); }
+    .tag-creator {
+      margin-top: 10px; padding: 14px; border-radius: 14px; background: var(--surface-2, #f0eee6);
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .tag-creator-name {
+      border: 1px solid var(--line, #ccc); border-radius: 10px; padding: 10px 12px; font-size: 14px;
+      background: var(--surface, #fff); color: var(--text, #1c1c1c);
+    }
+    .tag-creator-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+    .tag-creator-swatches .swatch {
+      width: 28px; height: 28px; border-radius: 999px; background: var(--sw); border: 2px solid transparent; cursor: pointer;
+    }
+    .tag-creator-swatches .swatch.selected { border-color: var(--text, #1c1c1c); }
+    .tag-creator-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .tag-creator-actions button {
+      border: 0; border-radius: 999px; padding: 8px 16px; font-size: 13px; font-weight: 700;
+      background: #1c1c1c; color: #fff; cursor: pointer;
+    }
+    .tag-creator-actions .tt-skip { background: transparent; color: var(--muted, #888); }
+
+    .row-menu {
+      position: fixed; z-index: 9996; background: var(--surface, #fff); color: var(--text, #1c1c1c);
+      border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); overflow: hidden; min-width: 140px;
+    }
+    .row-menu button {
+      display: block; width: 100%; text-align: left; padding: 12px 16px; border: 0; background: transparent;
+      font-size: 14px; cursor: pointer; color: inherit;
+    }
+    .row-menu button + button { border-top: 1px solid var(--line, #eee); }
+    .row-menu button.danger { color: #c0392b; }
+  </style>
+  <script type="module">
+    import { getSetting, setSetting } from './src/db.js';
+
+    const TUTORIAL_KEY = 'tutorialCompleted';
+
+    function buildSteps() {
+      // 基本操作は触ればすぐ分かるので説明しない。「メモ」と「ミュージアム」の
+      // 2画面がある、という最低限の構造だけ一言で案内する。画面端のタブに吹き出しを
+      // 添えると狭い画面幅ではみ出すため、中央モーダルで簡潔に伝える。
+      return [
+        { kind: 'intro',
+          text: '「メモ」で調べたことを書くと、下の「ミュージアム」にトロフィーとして増えていくよ。' },
+      ];
+    }
+
+    let spotEl = null;
+    let tipEl = null;
+    let cleanupFns = [];
+
+    function clearOverlay() {
+      cleanupFns.forEach((fn) => fn());
+      cleanupFns = [];
+      spotEl?.remove();
+      tipEl?.remove();
+      spotEl = null;
+      tipEl = null;
+    }
+
+    function placeSpot(target) {
+      if (!spotEl) {
+        spotEl = document.createElement('div');
+        spotEl.className = 'tutorial-spot';
+        document.body.appendChild(spotEl);
+      }
+      const rect = target.getBoundingClientRect();
+      const pad = 6;
+      spotEl.style.top = `${rect.top - pad}px`;
+      spotEl.style.left = `${rect.left - pad}px`;
+      spotEl.style.width = `${rect.width + pad * 2}px`;
+      spotEl.style.height = `${rect.height + pad * 2}px`;
+    }
+
+    function placeTip(target, html, { center = false } = {}) {
+      tipEl = document.createElement('div');
+      tipEl.className = center ? 'tutorial-tip center' : 'tutorial-tip';
+      tipEl.innerHTML = html;
+      document.body.appendChild(tipEl);
+      if (!center && target) {
+        const rect = target.getBoundingClientRect();
+        const tipRect = tipEl.getBoundingClientRect();
+        let top = rect.bottom + 14;
+        if (top + tipRect.height > window.innerHeight - 12) top = rect.top - tipRect.height - 14;
+        let left = Math.min(
+          Math.max(12, rect.left),
+          window.innerWidth - tipRect.width - 12
+        );
+        tipEl.style.top = `${Math.max(12, top)}px`;
+        tipEl.style.left = `${left}px`;
+      }
+      return tipEl;
+    }
+
+    function runTutorial(steps, startIndex = 0) {
+      let i = startIndex;
+
+      function finish() {
+        clearOverlay();
+        setSetting(TUTORIAL_KEY, true);
+      }
+
+      function next() {
+        clearOverlay();
+        if (i >= steps.length) { finish(); return; }
+        showStep(steps[i]);
+      }
+
+      function showStep(step) {
+        if (step.kind === 'intro' || step.kind === 'outro') {
+          const label = step.kind === 'outro' ? 'はじめる' : '次へ';
+          placeTip(null, `<div>${step.text}</div><div class="tt-actions">
+            <button class="tt-skip" type="button" data-act="skip">スキップ</button>
+            <button type="button" data-act="next">${label}</button>
+          </div>`, { center: true });
+          tipEl.querySelector('[data-act="next"]').addEventListener('click', () => { i++; next(); });
+          tipEl.querySelector('[data-act="skip"]').addEventListener('click', finish);
+          return;
+        }
+
+        const target = document.querySelector(step.target);
+        if (!target) { i++; next(); return; }
+
+        if (step.kind === 'inline') {
+          // ダイアログ内などの要素は、通常のスポットライトではなく要素の直後に案内を挿入する
+          const box = document.createElement('div');
+          box.className = 'tutorial-inline-tip';
+          box.innerHTML = `<div>${step.text}</div><div class="tt-actions"><button type="button">次へ</button></div>`;
+          target.insertAdjacentElement('afterend', box);
+          const advance = () => { box.remove(); i++; next(); };
+          box.querySelector('button').addEventListener('click', advance);
+          cleanupFns.push(() => box.remove());
+          return;
+        }
+
+        placeSpot(target);
+        placeTip(target, `<div>${step.text}</div>` + (step.kind === 'action'
+          ? '<span class="tt-hint">実際に押して進みます</span><div class="tt-actions"><button class="tt-skip" type="button" data-act="skip">スキップ</button></div>'
+          : `<div class="tt-actions"><button class="tt-skip" type="button" data-act="skip">スキップ</button><button type="button" data-act="next">次へ</button></div>`));
+
+        tipEl.querySelector('[data-act="skip"]')?.addEventListener('click', finish);
+        tipEl.querySelector('[data-act="next"]')?.addEventListener('click', () => { i++; next(); });
+
+        if (step.kind === 'action') {
+          const handler = () => { i++; next(); };
+          target.addEventListener(step.event, handler, { once: true });
+          cleanupFns.push(() => target.removeEventListener(step.event, handler));
+        }
+      }
+
+      next();
+    }
+
+    async function startTutorialIfNeeded() {
+      const done = await getSetting(TUTORIAL_KEY, false);
+      if (!done) runTutorial(buildSteps());
+    }
+
+    document.getElementById('replayTutorialButton')?.addEventListener('click', () => {
+      document.getElementById('settingsDialog')?.close();
+      setTimeout(() => runTutorial(buildSteps()), 150);
+    });
+
+    startTutorialIfNeeded();
+  </script>
+</body>
+</html>

@@ -1,0 +1,1705 @@
+import { buildTagColorMap, createNote, filterAndSortNotes, normalizeTags } from './model.js';
+import { parseSharePayload } from './share.js';
+import {
+  listNotes,
+  getSetting,
+  setSetting,
+  exportData,
+  importData,
+  putNote,
+  deleteNotePermanently,
+} from './db.js';
+
+const $ = (id) => document.getElementById(id);
+const DEFAULT_APP_TITLE = 'アイミュージアム';
+
+const els = {
+  libraryView: $('libraryView'),
+  editorView: $('editorView'),
+  trashView: $('trashView'),
+  searchInput: $('searchInput'),
+  sortSelect: $('sortSelect'),
+  tagFilters: $('tagFilters'),
+  noteList: $('noteList'),
+  emptyState: $('emptyState'),
+  resultCount: $('resultCount'),
+  addButton: $('addButton'),
+  quickCaptureDialog: $('quickCaptureDialog'),
+  quickCancelButton: $('quickCancelButton'),
+  quickTitleInput: $('quickTitleInput'),
+  quickTagsInput: $('quickTagsInput'),
+  quickContentInput: $('quickContentInput'),
+  quickSaveButton: $('quickSaveButton'),
+  quickEditButton: $('quickEditButton'),
+  quizButton: $('quizButton'),
+  trashButton: $('trashButton'),
+  trashEmptyAllButton: $('trashEmptyAllButton'),
+  accountButton: $('accountButton'),
+  homeButton: $('homeButton'),
+  appTitleInput: $('appTitleInput'),
+  backButton: $('backButton'),
+  saveState: $('saveState'),
+  pinButton: $('pinButton'),
+  favoriteButton: $('favoriteButton'),
+  titleInput: $('titleInput'),
+  tagsPicker: $('tagsPicker'),
+  contentInput: $('contentInput'),
+  deleteButton: $('deleteButton'),
+  attachmentInput: $('attachmentInput'),
+  attachmentList: $('attachmentList'),
+  trashBackButton: $('trashBackButton'),
+  trashList: $('trashList'),
+  settingsDialog: $('settingsDialog'),
+  themeSelect: $('themeSelect'),
+  exportButton: $('exportButton'),
+  importInput: $('importInput'),
+  toast: $('toast'),
+  selectionBar: $('selectionBar'),
+  selectionCount: $('selectionCount'),
+  selectionTagButton: $('selectionTagButton'),
+  selectionDeleteButton: $('selectionDeleteButton'),
+  selectionCancelButton: $('selectionCancelButton'),
+  bulkTagDialog: $('bulkTagDialog'),
+  bulkTagTargetCount: $('bulkTagTargetCount'),
+  bulkTagPicker: $('bulkTagPicker'),
+  bulkTagCloseButton: $('bulkTagCloseButton'),
+  bulkTagApplyButton: $('bulkTagApplyButton'),
+  museumView: $('museumView'),
+  tabMemoButton: $('tabMemoButton'),
+  tabMuseumButton: $('tabMuseumButton'),
+  museumTabBadge: $('museumTabBadge'),
+  trophyShelf: $('trophyShelf'),
+  museumEmptyState: $('museumEmptyState'),
+  museumTrophyCount: $('museumTrophyCount'),
+  aiMascot: $('aiMascot'),
+  aiSpeechBubble: $('aiSpeechBubble'),
+  dailyMissionButton: $('dailyMissionButton'),
+  dailyMissionText: $('dailyMissionText'),
+  trophyDetailDialog: $('trophyDetailDialog'),
+  trophyDetailTier: $('trophyDetailTier'),
+  trophyDetailName: $('trophyDetailName'),
+  trophyDetailIcon: $('trophyDetailIcon'),
+  trophyDetailCount: $('trophyDetailCount'),
+  trophyDetailFirstDate: $('trophyDetailFirstDate'),
+  trophyDetailNext: $('trophyDetailNext'),
+};
+
+const state = {
+  notes: [],
+  activeNoteId: null,
+  expandedNoteId: null,
+  selectedTags: new Set(),
+  editingTags: new Set(),
+  selectionMode: false,
+  selectedNoteIds: new Set(),
+  bulkTagPicks: new Set(),
+  tagRegistry: [], // [{ name, color, lastSeenTier }] 作成時に色を選べるタグの一覧
+  query: '',
+  sort: 'updated',
+  autosaveTimer: null,
+  toastTimer: null,
+  appTitleTimer: null,
+  activeTab: 'library',
+  museumTagOrder: [],
+  mascotTimer: null,
+  reorderState: null,
+};
+
+const TAG_COLOR_SWATCHES = [
+  '#E1665D', '#E8A33D', '#D9BB3C', '#6FA85B', '#3FA0A0',
+  '#4E8BC9', '#7C6FD1', '#C36FC0', '#8A8F98', '#4A4A4A',
+];
+
+async function upsertTagInRegistry(name, color) {
+  const registry = [...state.tagRegistry];
+  const idx = registry.findIndex((t) => t.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+  if (idx >= 0) registry[idx] = { name, color };
+  else registry.push({ name, color });
+  await setSetting('tagRegistry', registry);
+  state.tagRegistry = registry;
+  return registry;
+}
+
+// 登録済みタグは指定した色、それ以外(バックアップ由来などの未登録タグ)は
+// 従来通りの自動配色にフォールバックする。
+function resolveTagColorMap(tagOrder) {
+  const map = buildTagColorMap(tagOrder);
+  for (const entry of state.tagRegistry) {
+    const match = tagOrder.find((tag) => tag.toLocaleLowerCase() === entry.name.toLocaleLowerCase());
+    if (match) map[match] = entry.color;
+  }
+  return map;
+}
+
+function currentNote() {
+  return state.notes.find((note) => note.id === state.activeNoteId) || null;
+}
+
+function formatDate(timestamp) {
+  if (!timestamp) return '';
+  return new Intl.DateTimeFormat('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(timestamp);
+}
+
+function showToast(message) {
+  clearTimeout(state.toastTimer);
+  els.toast.textContent = message;
+  els.toast.hidden = false;
+  state.toastTimer = setTimeout(() => { els.toast.hidden = true; }, 1800);
+}
+
+function showView(view) {
+  els.libraryView.hidden = view !== 'library';
+  els.museumView.hidden = view !== 'museum';
+  els.editorView.hidden = view !== 'editor';
+  els.trashView.hidden = view !== 'trash';
+  const showTabs = view === 'library' || view === 'museum';
+  document.querySelector('.tab-bar')?.toggleAttribute('hidden', !showTabs);
+  if (showTabs) {
+    state.activeTab = view;
+    els.tabMemoButton.classList.toggle('is-active', view === 'library');
+    els.tabMuseumButton.classList.toggle('is-active', view === 'museum');
+  }
+  if (view === 'museum') {
+    renderMuseum();
+    stopMascotIdleLoop();
+    scheduleMascotIdleLoop();
+  } else {
+    stopMascotIdleLoop();
+  }
+  window.scrollTo({ top: 0, behavior: 'instant' });
+}
+
+function textWithLinks(container, text) {
+  container.replaceChildren();
+  const value = String(text || '');
+  const regex = /(https?:\/\/[^\s]+)/gi;
+  let last = 0;
+  for (const match of value.matchAll(regex)) {
+    const index = match.index ?? 0;
+    container.append(document.createTextNode(value.slice(last, index)));
+    const link = document.createElement('a');
+    link.href = match[0];
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = match[0];
+    link.addEventListener('click', (event) => event.stopPropagation());
+    container.append(link);
+    last = index + match[0].length;
+  }
+  container.append(document.createTextNode(value.slice(last)));
+}
+
+function collectAllTags() {
+  const counts = new Map();
+  for (const note of state.notes) {
+    if (note.deletedAt != null) continue;
+    for (const tag of note.tags || []) counts.set(tag, (counts.get(tag) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ja'));
+}
+
+function renderTagFilters(tagEntries, colorMap) {
+  els.tagFilters.replaceChildren();
+
+  const allCount = state.notes.filter((note) => note.deletedAt == null).length;
+  const allButton = document.createElement('button');
+  allButton.type = 'button';
+  allButton.className = `tag-chip${state.selectedTags.size === 0 ? ' active' : ''}`;
+  allButton.style.setProperty('--tag-color', 'var(--muted)');
+  allButton.textContent = `すべて ${allCount}`;
+  allButton.addEventListener('click', () => {
+    state.selectedTags.clear();
+    renderLibrary();
+  });
+  els.tagFilters.append(allButton);
+
+  for (const [tag, count] of tagEntries) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `tag-chip${state.selectedTags.has(tag) ? ' active' : ''}`;
+    button.style.setProperty('--tag-color', colorMap[tag]);
+    button.textContent = `${tag} ${count}`;
+    button.addEventListener('click', () => {
+      // 以前は複数タグをAND条件で積み重ねる仕様だったが、選択中のタグが
+      // 画面から見えづらく「別のタグを押したはずが該当なしになる」原因になっていた。
+      // タップ1回=そのタグだけで絞り込み、もう一度押すと解除、に変更。
+      if (state.selectedTags.has(tag) && state.selectedTags.size === 1) {
+        state.selectedTags.clear();
+      } else {
+        state.selectedTags.clear();
+        state.selectedTags.add(tag);
+      }
+      renderLibrary();
+    });
+    els.tagFilters.append(button);
+  }
+}
+
+function renderLibrary() {
+  updateSelectionBar();
+  const tagEntries = collectAllTags();
+  const tagOrder = tagEntries.map(([tag]) => tag);
+  const colorMap = resolveTagColorMap(tagOrder);
+  renderTagFilters(tagEntries, colorMap);
+
+  const notes = filterAndSortNotes(state.notes, {
+    query: state.query,
+    tags: [...state.selectedTags],
+    sort: state.sort,
+    tagOrder,
+  });
+
+  els.noteList.replaceChildren();
+  els.resultCount.textContent = `${notes.length}件`;
+  els.emptyState.hidden = notes.length !== 0 || Boolean(state.query) || state.selectedTags.size > 0;
+
+  if (notes.length === 0 && (state.query || state.selectedTags.size)) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<strong>該当する知識がありません</strong><span>検索語やタブを変えてみてください。</span>';
+    els.noteList.append(empty);
+    return;
+  }
+
+  for (const note of notes) {
+    const card = document.createElement('article');
+    card.className = 'note-card';
+    if (state.selectionMode) card.classList.add('selection-mode');
+    if (state.selectedNoteIds.has(note.id)) card.classList.add('selected');
+
+    const swipeWrap = document.createElement('div');
+    swipeWrap.className = 'note-swipe-wrap';
+
+    const swipeBg = document.createElement('div');
+    swipeBg.className = 'note-swipe-bg';
+    swipeBg.innerHTML = '<span aria-hidden="true">🗑</span>';
+    swipeWrap.append(swipeBg);
+
+    const row = document.createElement('div');
+    row.className = 'note-title-row';
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+
+    const selectDot = document.createElement('span');
+    selectDot.className = 'note-select-dot';
+    selectDot.setAttribute('aria-hidden', 'true');
+    selectDot.textContent = state.selectedNoteIds.has(note.id) ? '✓' : '';
+    row.append(selectDot);
+
+    attachRowGestures(row, note, swipeBg);
+
+    const primaryTag = note.tags?.[0];
+    if (primaryTag) {
+      const dot = document.createElement('span');
+      dot.className = 'tab-dot';
+      dot.style.setProperty('--tag-color', colorMap[primaryTag] || 'var(--muted)');
+      dot.setAttribute('aria-label', `タブ: ${primaryTag}`);
+      dot.title = primaryTag;
+      row.append(dot);
+    }
+
+    const title = document.createElement('div');
+    title.className = 'note-title';
+    title.textContent = note.title.trim() || '無題';
+    row.append(title);
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'note-edit-btn';
+    editBtn.setAttribute('aria-label', '編集・削除メニュー');
+    editBtn.title = '編集・削除メニュー';
+    editBtn.textContent = '✏️';
+    editBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (state.selectionMode) return;
+      openRowMenu(note, editBtn);
+    });
+    row.append(editBtn);
+
+    swipeWrap.append(row);
+    card.append(swipeWrap);
+    card.append(buildInlinePanel(note));
+    els.noteList.append(card);
+
+    if (state.expandedNoteId === note.id) {
+      const wrap = card.querySelector('.note-inline-wrap');
+      requestAnimationFrame(() => wrap.classList.add('open'));
+    }
+  }
+}
+
+const SWIPE_REVEAL_PX = 84; // スワイプで止まる位置(ゴミ箱が見える所まで)
+const SWIPE_DELETE_PX = 150; // ここを超えて離すと即削除
+
+// 長押しで複数選択モードに入ると同時にrenderLibrary()がDOMを丸ごと作り直すため、
+// 指がまだ触れたままの状態で古いrow要素が消え、直後に発生するpointerupは
+// 新しく作られたrow(状態がリセットされた別インスタンス)で拾われてしまう。
+// これをゴースト操作として無視するためのタイムスタンプガード。
+let selectionModeEnteredAt = 0;
+
+// タイトル行のジェスチャーをまとめて設定する:
+// ・軽くタップ → 展開(または選択モード中はON/OFF切り替え)
+// ・長押し(500ms) → 複数選択モードに入る
+// ・左スワイプ → ゴミ箱を出す。さらに引くと削除
+function attachRowGestures(row, note, swipeBg) {
+  let longPressTimer = null;
+  let longPressTriggered = false;
+  let dragging = false;
+  let swiping = false;
+  let startX = 0;
+  let startY = 0;
+  let currentX = 0;
+  let restingX = 0; // 前回スワイプで止まった位置(0 or -SWIPE_REVEAL_PX)
+
+  function setTranslate(x, animated) {
+    row.classList.toggle('swiping', !animated);
+    row.style.transform = x ? `translateX(${x}px)` : '';
+  }
+
+  function cancelLongPress() {
+    clearTimeout(longPressTimer);
+  }
+
+  row.addEventListener('pointerdown', (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    startX = event.clientX;
+    startY = event.clientY;
+    currentX = restingX;
+    dragging = false;
+    swiping = false;
+    longPressTriggered = false;
+    cancelLongPress();
+    longPressTimer = setTimeout(() => {
+      if (dragging) return; // スワイプ中なら長押し扱いにしない
+      longPressTriggered = true;
+      if (navigator.vibrate) navigator.vibrate(12);
+      enterSelectionMode(note.id);
+    }, 500);
+  });
+
+  row.addEventListener('pointermove', (event) => {
+    if (state.selectionMode) return; // 選択モード中はスワイプ削除を無効化
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    if (!dragging) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      if (Math.abs(dy) > Math.abs(dx)) return; // 縦スクロール優先、スワイプ扱いにしない
+      dragging = true;
+      swiping = true;
+      cancelLongPress();
+      row.setPointerCapture?.(event.pointerId);
+    }
+    if (!swiping) return;
+    event.preventDefault();
+    const raw = restingX + dx;
+    currentX = Math.max(Math.min(raw, 0), -SWIPE_DELETE_PX - 40);
+    setTranslate(currentX, false);
+  });
+
+  async function endSwipe() {
+    if (currentX <= -SWIPE_DELETE_PX) {
+      setTranslate(-400, true);
+      note.deletedAt = Date.now();
+      note.updatedAt = Date.now();
+      await putNote(note);
+      showToast('ゴミ箱へ移動しました');
+      setTimeout(renderLibrary, 160);
+      return;
+    }
+    if (currentX <= -SWIPE_REVEAL_PX / 2) {
+      restingX = -SWIPE_REVEAL_PX;
+    } else {
+      restingX = 0;
+    }
+    setTranslate(restingX, true);
+  }
+
+  row.addEventListener('pointerup', (event) => {
+    cancelLongPress();
+    if (swiping) {
+      row.releasePointerCapture?.(event.pointerId);
+      endSwipe();
+      swiping = false;
+      dragging = false;
+      return;
+    }
+    dragging = false;
+    if (longPressTriggered) return;
+    if (restingX !== 0) {
+      // ゴミ箱が見えている状態でのタップ → そのタップで削除確定
+      endSwipeTapToDelete();
+      return;
+    }
+    if (state.selectionMode) {
+      if (Date.now() - selectionModeEnteredAt < 400) return; // 選択モード開始直後のゴーストpointerupを無視
+      toggleNoteSelection(note.id);
+    } else {
+      toggleInlineExpand(note.id);
+    }
+  });
+
+  async function endSwipeTapToDelete() {
+    setTranslate(-400, true);
+    note.deletedAt = Date.now();
+    note.updatedAt = Date.now();
+    await putNote(note);
+    showToast('ゴミ箱へ移動しました');
+    setTimeout(renderLibrary, 160);
+  }
+
+  // ゴミ箱が見えている状態(restingX !== 0)でrow自体は左にずれているため、
+  // 露出したゴミ箱アイコン部分は実際にはswipeBg要素の上にある。
+  // rowのpointerupだけでは拾えないので、ここにも同じタップ削除を仕込む。
+  swipeBg?.addEventListener('pointerup', () => {
+    if (restingX !== 0) endSwipeTapToDelete();
+  });
+
+  row.addEventListener('pointerleave', () => {
+    cancelLongPress();
+  });
+  row.addEventListener('pointercancel', () => {
+    cancelLongPress();
+    dragging = false;
+    swiping = false;
+    setTranslate(restingX, true);
+  });
+  row.addEventListener('click', (event) => {
+    // pointerup側で処理済みなので、合成clickでの二重発火(展開/選択の連打)だけ防ぐ。
+    if (swiping || longPressTriggered) event.preventDefault();
+  });
+  row.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (state.selectionMode) toggleNoteSelection(note.id);
+      else toggleInlineExpand(note.id);
+    }
+  });
+}
+
+// ---- 複数選択モード ----
+
+function enterSelectionMode(firstNoteId) {
+  state.selectionMode = true;
+  state.selectedNoteIds = new Set([firstNoteId]);
+  selectionModeEnteredAt = Date.now();
+  renderLibrary();
+}
+
+function toggleNoteSelection(noteId) {
+  if (state.selectedNoteIds.has(noteId)) state.selectedNoteIds.delete(noteId);
+  else state.selectedNoteIds.add(noteId);
+  if (state.selectedNoteIds.size === 0) {
+    exitSelectionMode();
+    return;
+  }
+  renderLibrary();
+}
+
+function exitSelectionMode() {
+  state.selectionMode = false;
+  state.selectedNoteIds = new Set();
+  renderLibrary();
+}
+
+function updateSelectionBar() {
+  const count = state.selectedNoteIds.size;
+  els.selectionBar.hidden = !state.selectionMode;
+  els.selectionCount.textContent = `${count}件選択中`;
+}
+
+async function bulkDeleteSelected() {
+  const ids = [...state.selectedNoteIds];
+  if (ids.length === 0) return;
+  if (!confirm(`選択した${ids.length}件をゴミ箱へ移動しますか？`)) return;
+  const now = Date.now();
+  for (const id of ids) {
+    const note = state.notes.find((n) => n.id === id);
+    if (!note) continue;
+    note.deletedAt = now;
+    note.updatedAt = now;
+    await putNote(note);
+  }
+  showToast(`${ids.length}件をゴミ箱へ移動しました`);
+  exitSelectionMode();
+}
+
+function openBulkTagDialog() {
+  if (state.selectedNoteIds.size === 0) return;
+  state.bulkTagPicks = new Set();
+  els.bulkTagTargetCount.textContent = String(state.selectedNoteIds.size);
+  renderBulkTagPicker();
+  els.bulkTagDialog.hidden = false;
+}
+
+function closeBulkTagDialog() {
+  els.bulkTagDialog.hidden = true;
+}
+
+function tagChipCheck() {
+  const check = document.createElement('span');
+  check.className = 'tag-chip-check';
+  check.setAttribute('aria-hidden', 'true');
+  check.textContent = '✓';
+  return check;
+}
+
+function renderBulkTagPicker() {
+  const registryNames = state.tagRegistry.map((t) => t.name);
+  const usedNames = state.notes.flatMap((note) => note.tags || []);
+  const seen = new Set(registryNames.map((n) => n.toLocaleLowerCase()));
+  const names = [...registryNames];
+  for (const tag of usedNames) {
+    const key = tag.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(tag);
+  }
+  const colorMap = resolveTagColorMap(names);
+
+  els.bulkTagPicker.replaceChildren();
+  for (const name of names) {
+    const active = state.bulkTagPicks.has(name);
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = `tag-chip${active ? ' active' : ''}`;
+    chip.style.setProperty('--tag-color', colorMap[name]);
+    chip.append(tagChipCheck(), document.createTextNode(name));
+    chip.addEventListener('click', () => {
+      if (state.bulkTagPicks.has(name)) state.bulkTagPicks.delete(name);
+      else state.bulkTagPicks.add(name);
+      renderBulkTagPicker();
+    });
+    els.bulkTagPicker.append(chip);
+  }
+  if (names.length === 0) {
+    const hint = document.createElement('span');
+    hint.className = 'muted';
+    hint.textContent = 'まだタグがありません。メモの編集画面で新規タグを作ってください。';
+    els.bulkTagPicker.append(hint);
+  }
+}
+
+async function applyBulkTags() {
+  const picks = [...state.bulkTagPicks];
+  if (picks.length === 0) {
+    closeBulkTagDialog();
+    return;
+  }
+  const ids = [...state.selectedNoteIds];
+  for (const id of ids) {
+    const note = state.notes.find((n) => n.id === id);
+    if (!note) continue;
+    const merged = new Set([...(note.tags || []), ...picks]);
+    note.tags = normalizeTags([...merged]);
+    note.updatedAt = Date.now();
+    await putNote(note);
+  }
+  showToast(`${ids.length}件にタグを追加しました`);
+  closeBulkTagDialog();
+  exitSelectionMode();
+}
+
+// タイトルの長押し、またはペンマークのタップで出す「編集/削除」メニュー。
+function openRowMenu(note, anchorEl) {
+  document.querySelectorAll('.row-menu').forEach((menu) => menu.remove());
+
+  const menu = document.createElement('div');
+  menu.className = 'row-menu';
+
+  const editItem = document.createElement('button');
+  editItem.type = 'button';
+  editItem.textContent = '✏️ 編集';
+  editItem.addEventListener('click', () => {
+    menu.remove();
+    openEditor(note.id);
+  });
+
+  const deleteItem = document.createElement('button');
+  deleteItem.type = 'button';
+  deleteItem.className = 'danger';
+  deleteItem.textContent = '🗑 削除';
+  deleteItem.addEventListener('click', async () => {
+    menu.remove();
+    note.deletedAt = Date.now();
+    note.updatedAt = Date.now();
+    await putNote(note);
+    renderLibrary();
+    showToast('ゴミ箱へ移動しました');
+  });
+
+  menu.append(editItem, deleteItem);
+  document.body.append(menu);
+
+  const rect = anchorEl.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  let top = rect.bottom + 6;
+  if (top + menuRect.height > window.innerHeight - 12) top = rect.top - menuRect.height - 6;
+  const left = Math.min(Math.max(12, rect.left), window.innerWidth - menuRect.width - 12);
+  menu.style.top = `${Math.max(12, top)}px`;
+  menu.style.left = `${left}px`;
+
+  requestAnimationFrame(() => {
+    const closeOnOutside = (event) => {
+      if (!menu.contains(event.target)) {
+        menu.remove();
+        document.removeEventListener('pointerdown', closeOnOutside);
+      }
+    };
+    document.addEventListener('pointerdown', closeOnOutside);
+  });
+}
+
+// タイトル行を押すとページ転換せずその場で内容を開く。中の内容欄はそのまま
+// 編集もできる(自動保存)。フルページでの編集は長押し/ペンマークのメニューから。
+function toggleInlineExpand(noteId) {
+  state.expandedNoteId = state.expandedNoteId === noteId ? null : noteId;
+  renderLibrary();
+}
+
+const inlineSaveTimers = new Map();
+
+function scheduleInlineSave(note) {
+  clearTimeout(inlineSaveTimers.get(note.id));
+  const timer = setTimeout(async () => {
+    note.updatedAt = Date.now();
+    await putNote(note);
+  }, 500);
+  inlineSaveTimers.set(note.id, timer);
+}
+
+function buildInlinePanel(note) {
+  const wrap = document.createElement('div');
+  wrap.className = 'note-inline-wrap';
+  const panel = document.createElement('div');
+  panel.className = 'note-inline-panel';
+  const inner = document.createElement('div');
+  inner.className = 'note-inline-inner';
+
+  if (state.expandedNoteId === note.id) {
+    const textarea = document.createElement('textarea');
+    textarea.className = 'note-inline-content';
+    textarea.value = note.content;
+    textarea.placeholder = '内容を入力…';
+    textarea.rows = 1;
+    const autoResize = () => {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    };
+    textarea.addEventListener('input', () => {
+      note.content = textarea.value;
+      scheduleInlineSave(note);
+      autoResize();
+    });
+    textarea.addEventListener('click', (event) => event.stopPropagation());
+    inner.append(textarea);
+    requestAnimationFrame(autoResize);
+
+    if (note.attachments && note.attachments.length) {
+      const images = document.createElement('div');
+      images.className = 'note-inline-images';
+      images.addEventListener('click', (event) => event.stopPropagation());
+      for (const attachment of note.attachments) {
+        const img = document.createElement('img');
+        img.src = attachment.dataUrl;
+        img.alt = attachment.name || '添付画像';
+        img.loading = 'lazy';
+        images.append(img);
+      }
+      inner.append(images);
+    }
+  }
+
+  panel.append(inner);
+  wrap.append(panel);
+  return wrap;
+}
+
+function updateEditorButtons(note) {
+  els.pinButton.classList.toggle('active', note.pinned);
+  els.favoriteButton.classList.toggle('active', note.favorite);
+  els.favoriteButton.textContent = note.favorite ? '★' : '☆';
+}
+
+function renderAttachments(note) {
+  els.attachmentList.replaceChildren();
+  for (const attachment of note.attachments || []) {
+    const card = document.createElement('div');
+    card.className = 'attachment-card';
+    const img = document.createElement('img');
+    img.src = attachment.dataUrl;
+    img.alt = attachment.name || '添付画像';
+    img.loading = 'lazy';
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'attachment-remove';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', '画像を削除');
+    remove.addEventListener('click', () => {
+      note.attachments = note.attachments.filter((item) => item.id !== attachment.id);
+      scheduleAutosave();
+      renderAttachments(note);
+    });
+    card.append(img, remove);
+    els.attachmentList.append(card);
+  }
+}
+
+async function openEditor(noteId = null, seed = null) {
+  let note = noteId ? state.notes.find((item) => item.id === noteId) : null;
+  if (!note) {
+    note = createNote(seed || {});
+    state.notes.push(note);
+    await putNote(note);
+  }
+  state.activeNoteId = note.id;
+  els.titleInput.value = note.title;
+  state.editingTags = new Set(normalizeTags(note.tags));
+  renderTagsPicker();
+  els.contentInput.value = note.content;
+  els.saveState.textContent = '保存済み';
+  updateEditorButtons(note);
+  renderAttachments(note);
+  showView('editor');
+  requestAnimationFrame(() => (note.title ? els.contentInput : els.titleInput).focus());
+}
+
+function syncInputsToNote() {
+  const note = currentNote();
+  if (!note) return null;
+  note.title = els.titleInput.value;
+  note.content = els.contentInput.value;
+  note.tags = normalizeTags([...state.editingTags]);
+  note.updatedAt = Date.now();
+  return note;
+}
+
+// 登録済みタグ(＋そのメモに既についている未登録タグ)をチップで表示し、
+// タップでON/OFFできるようにする。末尾に新規タグ作成チップを置く。
+function renderTagsPicker() {
+  const registryNames = state.tagRegistry.map((t) => t.name);
+  // タグ作成ダイアログを経由せず、自由入力の時代に付けられたタグも候補に出す。
+  // (登録済みタグ一覧だけだと、編集中のメモに元々ついていないタグは出てこなかった)
+  const usedNames = state.notes.flatMap((note) => note.tags || []);
+  const seen = new Set(registryNames.map((name) => name.toLocaleLowerCase()));
+  const extra = [];
+  // 登録済み・既存メモ使用済みのタグで並び順を固定する。
+  // (以前はeditingTagsを先頭で展開していたため、選択/解除するたびに
+  // 表示順が入れ替わり分かりにくかった)
+  for (const tag of usedNames) {
+    const key = tag.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    extra.push(tag);
+  }
+  // 登録済みにも既存メモにもまだ無い、今回新規作成したばかりのタグだけ末尾に追加。
+  for (const tag of state.editingTags) {
+    const key = tag.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    extra.push(tag);
+  }
+  const allNames = [...registryNames, ...extra];
+  const colorMap = resolveTagColorMap(allNames);
+
+  els.tagsPicker.replaceChildren();
+  for (const name of allNames) {
+    const active = [...state.editingTags].some((tag) => tag.toLocaleLowerCase() === name.toLocaleLowerCase());
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = `tag-chip${active ? ' active' : ''}`;
+    chip.style.setProperty('--tag-color', colorMap[name]);
+    chip.append(tagChipCheck(), document.createTextNode(name));
+    chip.addEventListener('click', () => {
+      if (active) {
+        for (const tag of [...state.editingTags]) {
+          if (tag.toLocaleLowerCase() === name.toLocaleLowerCase()) state.editingTags.delete(tag);
+        }
+      } else {
+        state.editingTags.add(name);
+      }
+      renderTagsPicker();
+      scheduleAutosave();
+    });
+    els.tagsPicker.append(chip);
+  }
+
+  const addChip = document.createElement('button');
+  addChip.type = 'button';
+  addChip.className = 'tag-chip tag-chip-add';
+  addChip.textContent = '＋ 新規タグ';
+  addChip.addEventListener('click', openTagCreator);
+  els.tagsPicker.append(addChip);
+}
+
+function openTagCreator() {
+  document.querySelectorAll('.tag-creator').forEach((el) => el.remove());
+
+  const panel = document.createElement('div');
+  panel.className = 'tag-creator';
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'tag-creator-name';
+  nameInput.placeholder = 'タグ名';
+  nameInput.maxLength = 24;
+
+  const swatchRow = document.createElement('div');
+  swatchRow.className = 'tag-creator-swatches';
+  let chosenColor = TAG_COLOR_SWATCHES[Math.floor(Math.random() * TAG_COLOR_SWATCHES.length)];
+  const swatchButtons = TAG_COLOR_SWATCHES.map((color) => {
+    const sw = document.createElement('button');
+    sw.type = 'button';
+    sw.className = `swatch${color === chosenColor ? ' selected' : ''}`;
+    sw.style.setProperty('--sw', color);
+    sw.addEventListener('click', () => {
+      chosenColor = color;
+      swatchButtons.forEach((b) => b.classList.remove('selected'));
+      sw.classList.add('selected');
+    });
+    swatchRow.append(sw);
+    return sw;
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'tag-creator-actions';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'tt-skip';
+  cancelBtn.textContent = 'キャンセル';
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.textContent = '追加';
+
+  cancelBtn.addEventListener('click', () => panel.remove());
+  saveBtn.addEventListener('click', async () => {
+    const [name] = normalizeTags([nameInput.value]);
+    if (!name) { panel.remove(); return; }
+    await upsertTagInRegistry(name, chosenColor);
+    state.editingTags.add(name);
+    panel.remove();
+    renderTagsPicker();
+    scheduleAutosave();
+  });
+
+  actions.append(cancelBtn, saveBtn);
+  panel.append(nameInput, swatchRow, actions);
+  els.tagsPicker.insertAdjacentElement('afterend', panel);
+  nameInput.focus();
+}
+
+async function saveActiveNote() {
+  const note = syncInputsToNote();
+  if (!note) return;
+  els.saveState.textContent = '保存中…';
+  await putNote(note);
+  els.saveState.textContent = '保存済み';
+  renderLibrary();
+}
+
+function scheduleAutosave() {
+  clearTimeout(state.autosaveTimer);
+  els.saveState.textContent = '未保存';
+  state.autosaveTimer = setTimeout(saveActiveNote, 500);
+}
+
+async function flushAutosave() {
+  if (!state.activeNoteId) return;
+  if (state.autosaveTimer) {
+    clearTimeout(state.autosaveTimer);
+    state.autosaveTimer = null;
+  }
+  await saveActiveNote();
+}
+
+async function closeEditor() {
+  await flushAutosave();
+  state.activeNoteId = null;
+  showView('library');
+  renderLibrary();
+}
+
+async function createFromClipboard() {
+  try {
+    if (!navigator.clipboard?.readText) throw new Error('Clipboard unavailable');
+    const content = await navigator.clipboard.readText();
+    await openEditor(null, { content });
+    if (content) showToast('本文に貼り付けました');
+  } catch {
+    await openEditor();
+    showToast('クリップボードを読めないため空欄で作成しました');
+  }
+}
+
+function quickCaptureSeed() {
+  return {
+    title: els.quickTitleInput.value,
+    content: els.quickContentInput.value,
+    tags: normalizeTags(els.quickTagsInput.value.split(/[,、]/)),
+  };
+}
+
+function closeQuickCapture() {
+  if (els.quickCaptureDialog.open && typeof els.quickCaptureDialog.close === 'function') {
+    els.quickCaptureDialog.close();
+  } else {
+    els.quickCaptureDialog.removeAttribute('open');
+  }
+}
+
+function openQuickCapture(seed = {}) {
+  els.quickTitleInput.value = String(seed.title ?? '');
+  els.quickTagsInput.value = normalizeTags(seed.tags ?? []).join(', ');
+  els.quickContentInput.value = String(seed.content ?? '');
+
+  if (typeof els.quickCaptureDialog.showModal === 'function') els.quickCaptureDialog.showModal();
+  else els.quickCaptureDialog.setAttribute('open', '');
+
+  requestAnimationFrame(() => {
+    const target = els.quickTitleInput.value ? els.quickContentInput : els.quickTitleInput;
+    target.focus();
+    if (target === els.quickContentInput) target.setSelectionRange(target.value.length, target.value.length);
+  });
+}
+
+async function saveQuickCapture() {
+  const seed = quickCaptureSeed();
+  if (!seed.title.trim() && !seed.content.trim()) {
+    showToast('タイトルか内容を入力してください');
+    return;
+  }
+  const note = createNote(seed);
+  state.notes.push(note);
+  await putNote(note);
+  renderLibrary();
+  closeQuickCapture();
+  showToast('保存しました');
+}
+
+async function editQuickCapture() {
+  const seed = quickCaptureSeed();
+  closeQuickCapture();
+  await openEditor(null, seed);
+}
+
+function handleInitialShareTarget() {
+  const payload = parseSharePayload(new URLSearchParams(location.search));
+  if (!payload.isShareTarget) return;
+
+  const cleanUrl = `${location.pathname}${location.hash}`;
+  history.replaceState(null, '', cleanUrl);
+  openQuickCapture({ title: payload.title, content: payload.content });
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addAttachments(files) {
+  const note = currentNote();
+  if (!note) return;
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue;
+    if (file.size > 10 * 1024 * 1024) {
+      showToast(`${file.name} は10MBを超えるため追加できません`);
+      continue;
+    }
+    const dataUrl = await fileToDataUrl(file);
+    note.attachments.push({
+      id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: file.name,
+      type: file.type,
+      dataUrl,
+    });
+  }
+  renderAttachments(note);
+  scheduleAutosave();
+}
+
+async function toggleFlag(key) {
+  const note = currentNote();
+  if (!note) return;
+  note[key] = !note[key];
+  note.updatedAt = Date.now();
+  await putNote(note);
+  updateEditorButtons(note);
+  renderLibrary();
+}
+
+async function moveActiveToTrash() {
+  await flushAutosave();
+  const note = currentNote();
+  if (!note) return;
+  note.deletedAt = Date.now();
+  note.updatedAt = Date.now();
+  await putNote(note);
+  state.activeNoteId = null;
+  showView('library');
+  renderLibrary();
+  showToast('ゴミ箱へ移動しました');
+}
+
+function renderTrash() {
+  const notes = filterAndSortNotes(state.notes, { onlyDeleted: true, sort: 'updated' });
+  els.trashList.replaceChildren();
+  if (els.trashEmptyAllButton) els.trashEmptyAllButton.disabled = notes.length === 0;
+  if (!notes.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<strong>ゴミ箱は空です</strong><span>削除した知識はここから復元できます。</span>';
+    els.trashList.append(empty);
+    return;
+  }
+
+  for (const note of notes) {
+    const card = document.createElement('div');
+    card.className = 'trash-card';
+    const title = document.createElement('strong');
+    title.textContent = note.title || '無題';
+    const meta = document.createElement('div');
+    meta.className = 'muted';
+    meta.textContent = `削除: ${formatDate(note.deletedAt)}`;
+    const actions = document.createElement('div');
+    actions.className = 'trash-card-actions';
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'secondary-btn';
+    restore.textContent = '復元';
+    restore.addEventListener('click', async () => {
+      note.deletedAt = null;
+      note.updatedAt = Date.now();
+      await putNote(note);
+      renderTrash();
+      renderLibrary();
+      showToast('復元しました');
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'danger-btn';
+    remove.style.gridColumn = 'auto';
+    remove.textContent = '完全削除';
+    remove.addEventListener('click', async () => {
+      if (!confirm(`「${note.title || '無題'}」を完全に削除しますか？`)) return;
+      await deleteNotePermanently(note.id);
+      state.notes = state.notes.filter((item) => item.id !== note.id);
+      renderTrash();
+      renderLibrary();
+      showToast('完全に削除しました');
+    });
+    actions.append(restore, remove);
+    card.append(title, meta, actions);
+    els.trashList.append(card);
+  }
+}
+
+async function emptyTrash() {
+  const notes = state.notes.filter((note) => note.deletedAt != null);
+  if (!notes.length) return;
+  if (!confirm(`ゴミ箱の${notes.length}件をすべて完全に削除しますか？この操作は取り消せません。`)) return;
+  for (const note of notes) {
+    await deleteNotePermanently(note.id);
+  }
+  const deletedIds = new Set(notes.map((note) => note.id));
+  state.notes = state.notes.filter((note) => !deletedIds.has(note.id));
+  renderTrash();
+  renderLibrary();
+  showToast('ゴミ箱を空にしました');
+}
+
+// 隠し機能(チュートリアルでは触れない): タイトルだけ見せて「内容は？」と出題し、
+// 「答えを見る」で自分が書いた内容を確認できる、ランダム出題クイズ。
+function openQuizNote() {
+  const candidates = state.notes.filter((note) => note.deletedAt == null);
+  if (!candidates.length) return showToast('知識がまだありません');
+  const note = candidates[Math.floor(Math.random() * candidates.length)];
+
+  const overlay = document.createElement('div');
+  overlay.className = 'quiz-overlay';
+
+  const card = document.createElement('div');
+  card.className = 'quiz-card';
+
+  const label = document.createElement('div');
+  label.className = 'quiz-label';
+  label.textContent = 'このタイトルの内容は？';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'quiz-title';
+  titleEl.textContent = note.title.trim() || '無題';
+
+  const contentEl = document.createElement('div');
+  contentEl.className = 'quiz-content';
+  contentEl.hidden = true;
+  contentEl.textContent = note.content || '(内容なし)';
+
+  const actions = document.createElement('div');
+  actions.className = 'quiz-actions';
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'secondary-btn';
+  closeBtn.textContent = '閉じる';
+  const revealBtn = document.createElement('button');
+  revealBtn.type = 'button';
+  revealBtn.className = 'primary-btn';
+  revealBtn.textContent = '答えを見る';
+
+  closeBtn.addEventListener('click', () => overlay.remove());
+  revealBtn.addEventListener('click', () => {
+    contentEl.hidden = false;
+    revealBtn.remove();
+  });
+
+  actions.append(closeBtn, revealBtn);
+  card.append(label, titleEl, contentEl, actions);
+  overlay.append(card);
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) overlay.remove(); });
+  document.body.append(overlay);
+}
+
+// ============ ミュージアム(トロフィー棚・アイ・デイリーミッション) ============
+
+const TROPHY_TIERS = [
+  { key: 'wood', name: '木', threshold: 1 },
+  { key: 'copper', name: '銅', threshold: 5 },
+  { key: 'silver', name: '銀', threshold: 15 },
+  { key: 'gold', name: '金', threshold: 30 },
+  { key: 'diamond', name: 'ダイヤモンド', threshold: 50 },
+  { key: 'platinum', name: 'プラチナ', threshold: 100 },
+];
+
+function tierForCount(count) {
+  let current = null;
+  for (const tier of TROPHY_TIERS) {
+    if (count >= tier.threshold) current = tier;
+  }
+  return current;
+}
+
+function nextTierForCount(count) {
+  return TROPHY_TIERS.find((tier) => count < tier.threshold) || null;
+}
+
+function computeTagStats() {
+  const active = state.notes.filter((note) => note.deletedAt == null);
+  const byKey = new Map(); // lowercased -> { name, count, firstCreatedAt }
+  for (const note of active) {
+    for (const rawTag of normalizeTags(note.tags)) {
+      const key = rawTag.toLocaleLowerCase();
+      const entry = byKey.get(key) || { name: rawTag, count: 0, firstCreatedAt: note.createdAt };
+      entry.count += 1;
+      entry.firstCreatedAt = Math.min(entry.firstCreatedAt, note.createdAt);
+      byKey.set(key, entry);
+    }
+  }
+  return [...byKey.values()];
+}
+
+function orderTagStats(stats) {
+  const order = state.museumTagOrder;
+  const ranks = new Map(order.map((name, i) => [name.toLocaleLowerCase(), i]));
+  return [...stats].sort((a, b) => {
+    const ra = ranks.has(a.name.toLocaleLowerCase()) ? ranks.get(a.name.toLocaleLowerCase()) : Number.MAX_SAFE_INTEGER;
+    const rb = ranks.has(b.name.toLocaleLowerCase()) ? ranks.get(b.name.toLocaleLowerCase()) : Number.MAX_SAFE_INTEGER;
+    if (ra !== rb) return ra - rb;
+    return b.count - a.count;
+  });
+}
+
+function lastSeenTierFor(tagName) {
+  const entry = state.tagRegistry.find((t) => t.name.toLocaleLowerCase() === tagName.toLocaleLowerCase());
+  return entry?.lastSeenTier || null;
+}
+
+async function markTierSeen(tagName, tierKey) {
+  const registry = [...state.tagRegistry];
+  const idx = registry.findIndex((t) => t.name.toLocaleLowerCase() === tagName.toLocaleLowerCase());
+  if (idx >= 0) registry[idx] = { ...registry[idx], lastSeenTier: tierKey };
+  else registry.push({ name: tagName, color: null, lastSeenTier: tierKey });
+  state.tagRegistry = registry;
+  await setSetting('tagRegistry', registry);
+}
+
+function hasUnseenTierUp(stats) {
+  const order = TROPHY_TIERS.map((t) => t.key);
+  return stats.some((stat) => {
+    const tier = tierForCount(stat.count);
+    if (!tier) return false;
+    const seen = lastSeenTierFor(stat.name);
+    if (!seen) return true;
+    return order.indexOf(tier.key) > order.indexOf(seen);
+  });
+}
+
+function updateMuseumBadge() {
+  const stats = computeTagStats();
+  const unseen = hasUnseenTierUp(stats);
+  els.museumTabBadge.hidden = !unseen;
+}
+
+function trophyIconMarkup(tierKey) {
+  // シンプルなカップ型アイコンをCSSグラデーションで材質表現する(画像アセット不要)。
+  return `<div class="trophy-icon trophy-icon-${tierKey}" aria-hidden="true">
+    <svg viewBox="0 0 48 48"><path d="M14 6h20v10a10 10 0 0 1-20 0V6Z"/><path d="M14 10H6v4a8 8 0 0 0 8 8"/><path d="M34 10h8v4a8 8 0 0 1-8 8"/><rect x="21" y="26" width="6" height="8"/><rect x="15" y="36" width="18" height="4" rx="2"/></svg>
+  </div>`;
+}
+
+function renderMuseum() {
+  const stats = orderTagStats(computeTagStats());
+  els.museumTrophyCount.textContent = stats.length ? `${stats.length}個の展示物` : '';
+  els.museumEmptyState.hidden = stats.length > 0;
+  els.trophyShelf.replaceChildren();
+
+  for (const stat of stats) {
+    const tier = tierForCount(stat.count);
+    if (!tier) continue;
+    const next = nextTierForCount(stat.count);
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'trophy-card';
+    card.dataset.tag = stat.name;
+    const seen = lastSeenTierFor(stat.name);
+    const order = TROPHY_TIERS.map((t) => t.key);
+    const isNew = !seen || order.indexOf(tier.key) > order.indexOf(seen);
+    card.innerHTML = `
+      ${trophyIconMarkup(tier.key)}
+      ${isNew ? '<span class="trophy-new-dot" aria-hidden="true"></span>' : ''}
+      <span class="trophy-tag-name">${escapeHtml(stat.name)}</span>
+      <span class="trophy-tier-name">${tier.name}</span>
+      <span class="trophy-count">${stat.count}件</span>
+    `;
+    card.addEventListener('click', () => openTrophyDetail(stat, tier, next));
+    attachTrophyReorder(card, stat.name);
+    els.trophyShelf.append(card);
+  }
+
+  updateMuseumBadge();
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch]));
+}
+
+async function openTrophyDetail(stat, tier, next) {
+  els.trophyDetailTier.textContent = tier.key.toUpperCase();
+  els.trophyDetailName.textContent = stat.name;
+  els.trophyDetailIcon.innerHTML = trophyIconMarkup(tier.key);
+  els.trophyDetailCount.textContent = `${stat.count}件`;
+  els.trophyDetailFirstDate.textContent = formatDate(stat.firstCreatedAt) || '-';
+  els.trophyDetailNext.textContent = next ? `あと${next.threshold - stat.count}件で${next.name}` : '最高ランクです！';
+  if (typeof els.trophyDetailDialog.showModal === 'function') els.trophyDetailDialog.showModal();
+  else els.trophyDetailDialog.setAttribute('open', '');
+  await markTierSeen(stat.name, tier.key);
+  updateMuseumBadge();
+}
+
+// 長押しでトロフィーの並び替え。押しっぱなしでカードを掴み、指を動かした先の
+// カードと順序を入れ替える簡易版(自由なドラッグ座標追従はしない)。
+function attachTrophyReorder(card, tagName) {
+  let pressTimer = null;
+  let dragging = false;
+
+  const startDrag = () => {
+    dragging = true;
+    card.classList.add('is-dragging');
+    if (navigator.vibrate) navigator.vibrate(15);
+  };
+
+  card.addEventListener('pointerdown', (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    pressTimer = setTimeout(startDrag, 450);
+  });
+
+  const cancelPress = () => {
+    clearTimeout(pressTimer);
+    if (dragging) {
+      dragging = false;
+      card.classList.remove('is-dragging');
+      persistCurrentTagOrder();
+    }
+  };
+
+  card.addEventListener('pointerup', cancelPress);
+  card.addEventListener('pointerleave', () => { clearTimeout(pressTimer); });
+  card.addEventListener('pointercancel', cancelPress);
+
+  card.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    const target = document.elementFromPoint(event.clientX, event.clientY);
+    const targetCard = target?.closest('.trophy-card');
+    if (!targetCard || targetCard === card || !els.trophyShelf.contains(targetCard)) return;
+    const cards = [...els.trophyShelf.children];
+    const from = cards.indexOf(card);
+    const to = cards.indexOf(targetCard);
+    if (from < to) els.trophyShelf.insertBefore(card, targetCard.nextSibling);
+    else els.trophyShelf.insertBefore(card, targetCard);
+  });
+
+  // クリックと長押しドラッグが競合しないよう、ドラッグが発生した直後のクリックは抑制する。
+  card.addEventListener('click', (event) => {
+    if (card.dataset.justDragged === '1') {
+      event.stopPropagation();
+      event.preventDefault();
+      delete card.dataset.justDragged;
+    }
+  }, true);
+}
+
+async function persistCurrentTagOrder() {
+  const order = [...els.trophyShelf.children].map((card) => card.dataset.tag).filter(Boolean);
+  state.museumTagOrder = order;
+  await setSetting('museumTagOrder', order);
+}
+
+// ---- アイ(案内役マスコット) ----
+
+const MASCOT_IDLE_MIN_MS = 22000;
+const MASCOT_IDLE_MAX_MS = 45000;
+
+function pickMascotLine() {
+  const stats = computeTagStats();
+  const active = state.notes.filter((note) => note.deletedAt == null);
+  const lines = [];
+
+  if (!active.length) {
+    lines.push('まだ何も知らないや。何か調べてみようよ！', 'ねえねえ、気になることある？');
+  } else {
+    const recent = [...active].sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (recent?.title) lines.push(`この前「${recent.title}」について調べてたね！`);
+    if (stats.length) {
+      const top = [...stats].sort((a, b) => b.count - a.count)[0];
+      lines.push(`「${top.name}」のことが${top.count}個もたまってるね！`);
+      const closest = stats
+        .map((s) => ({ s, next: nextTierForCount(s.count) }))
+        .filter((x) => x.next)
+        .sort((a, b) => (a.next.threshold - a.s.count) - (b.next.threshold - b.s.count))[0];
+      if (closest) lines.push(`「${closest.s.name}」、あと${closest.next.threshold - closest.s.count}件で${closest.next.name}トロフィーだよ！`);
+    }
+    lines.push('博物館、少しずつ大きくなってきたね。');
+  }
+  return lines[Math.floor(Math.random() * lines.length)];
+}
+
+function showMascotLine(text) {
+  els.aiSpeechBubble.textContent = text;
+  els.aiSpeechBubble.hidden = false;
+  els.aiMascot.classList.add('is-talking');
+  clearTimeout(state.mascotBubbleTimer);
+  state.mascotBubbleTimer = setTimeout(() => {
+    els.aiSpeechBubble.hidden = true;
+    els.aiMascot.classList.remove('is-talking');
+  }, 5000);
+}
+
+function scheduleMascotIdleLoop() {
+  const delay = MASCOT_IDLE_MIN_MS + Math.random() * (MASCOT_IDLE_MAX_MS - MASCOT_IDLE_MIN_MS);
+  state.mascotTimer = setTimeout(() => {
+    if (state.activeTab === 'museum') showMascotLine(pickMascotLine());
+    scheduleMascotIdleLoop();
+  }, delay);
+}
+
+function stopMascotIdleLoop() {
+  clearTimeout(state.mascotTimer);
+  state.mascotTimer = null;
+}
+
+// ---- デイリーミッション ----
+
+const MISSION_FALLBACKS = [
+  '空はどうして青いの？',
+  '生き物と乗り物、どっちが速く進化した？',
+  '一番好きな食べ物は、どこの国で生まれたんだろう？',
+  '今日見た乗り物や生き物で、気になったものはあった？',
+  '「もし〇〇じゃなかったら」を1つ考えてみよう',
+];
+
+function generateMissionText() {
+  const stats = computeTagStats();
+  if (stats.length) {
+    const weakest = [...stats].sort((a, b) => a.count - b.count)[0];
+    const prompts = [
+      `「${weakest.name}」についてもっと調べてみない？`,
+      `「${weakest.name}」に関係あることを、あと1つ見つけてみよう。`,
+    ];
+    if (Math.random() < 0.4) return MISSION_FALLBACKS[Math.floor(Math.random() * MISSION_FALLBACKS.length)];
+    return prompts[Math.floor(Math.random() * prompts.length)];
+  }
+  return MISSION_FALLBACKS[Math.floor(Math.random() * MISSION_FALLBACKS.length)];
+}
+
+async function handleDailyMissionTap() {
+  const today = new Date().toISOString().slice(0, 10);
+  let mission = await getSetting('dailyMission', null);
+  if (!mission || mission.date !== today) {
+    mission = { date: today, text: generateMissionText() };
+    await setSetting('dailyMission', mission);
+  }
+  els.dailyMissionText.textContent = mission.text;
+  showMascotLine(mission.text);
+}
+
+function downloadJson(data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const date = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `knowledge-backup-${date}.json`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  els.themeSelect.value = theme;
+}
+
+function applyAppTitle(value) {
+  const title = String(value || '').trim() || DEFAULT_APP_TITLE;
+  els.appTitleInput.value = title;
+  document.title = title;
+  return title;
+}
+
+async function saveAppTitle() {
+  clearTimeout(state.appTitleTimer);
+  state.appTitleTimer = null;
+  const title = applyAppTitle(els.appTitleInput.value);
+  await setSetting('appTitle', title);
+}
+
+function scheduleAppTitleSave() {
+  clearTimeout(state.appTitleTimer);
+  document.title = els.appTitleInput.value.trim() || DEFAULT_APP_TITLE;
+  state.appTitleTimer = setTimeout(saveAppTitle, 500);
+}
+
+function canGoBackInApp() {
+  return Boolean(els.settingsDialog.open) || !els.editorView.hidden || !els.trashView.hidden;
+}
+
+// ハードウェア/ジェスチャーの「戻る」から呼ばれる共通の戻り先。
+// 編集中は必ずflushAutosaveしてから戻るので、戻る操作で未保存分が消えない。
+async function goBack() {
+  if (els.settingsDialog.open) {
+    els.settingsDialog.close();
+    return;
+  }
+  if (!els.editorView.hidden) {
+    await closeEditor();
+    return;
+  }
+  if (!els.trashView.hidden) {
+    showView('library');
+    return;
+  }
+}
+
+async function goHome() {
+  if (state.activeNoteId) {
+    await flushAutosave();
+    state.activeNoteId = null;
+  }
+  if (els.settingsDialog.open && typeof els.settingsDialog.close === 'function') els.settingsDialog.close();
+  else els.settingsDialog.removeAttribute('open');
+  showView('library');
+  renderLibrary();
+}
+
+async function handleImport(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    await importData(data);
+    state.notes = await listNotes();
+    const theme = await getSetting('theme', 'system');
+    applyTheme(theme);
+    const appTitle = await getSetting('appTitle', 'アイミュージアム');
+    applyAppTitle(appTitle);
+    state.selectedTags.clear();
+    state.query = '';
+    els.searchInput.value = '';
+    renderLibrary();
+    showToast('バックアップを読み込みました');
+  } catch (error) {
+    console.error(error);
+    showToast('バックアップを読み込めませんでした');
+  } finally {
+    els.importInput.value = '';
+  }
+}
+
+function wireEvents() {
+  els.searchInput.addEventListener('input', () => {
+    state.query = els.searchInput.value;
+    renderLibrary();
+  });
+  els.sortSelect.addEventListener('change', () => {
+    state.sort = els.sortSelect.value;
+    renderLibrary();
+  });
+  els.addButton.addEventListener('click', () => openEditor());
+  // quickCaptureButton/clipboardButtonのUIは廃止(＋は右下のFABのみ)。
+  // クイック追加ダイアログ自体は共有(share target)からの受け口として残す。
+  els.quickCancelButton.addEventListener('click', closeQuickCapture);
+  els.quickSaveButton.addEventListener('click', saveQuickCapture);
+  els.quickEditButton.addEventListener('click', editQuickCapture);
+  els.quickCaptureDialog.addEventListener('click', (event) => {
+    if (event.target === els.quickCaptureDialog) closeQuickCapture();
+  });
+  els.quickCaptureDialog.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    closeQuickCapture();
+  });
+  els.quizButton.addEventListener('click', openQuizNote);
+  els.trashButton.addEventListener('click', () => {
+    renderTrash();
+    showView('trash');
+  });
+  els.trashBackButton.addEventListener('click', () => showView('library'));
+  els.trashEmptyAllButton?.addEventListener('click', emptyTrash);
+  els.backButton.addEventListener('click', closeEditor);
+  els.homeButton.addEventListener('click', goHome);
+  els.appTitleInput.addEventListener('input', scheduleAppTitleSave);
+  els.appTitleInput.addEventListener('blur', saveAppTitle);
+
+  for (const input of [els.titleInput, els.contentInput]) input.addEventListener('input', scheduleAutosave);
+
+  els.favoriteButton.addEventListener('click', () => toggleFlag('favorite'));
+  els.pinButton.addEventListener('click', () => toggleFlag('pinned'));
+  els.deleteButton.addEventListener('click', moveActiveToTrash);
+
+  els.attachmentInput.addEventListener('change', async () => {
+    await addAttachments([...els.attachmentInput.files]);
+    els.attachmentInput.value = '';
+  });
+
+  els.accountButton.addEventListener('click', () => {
+    if (typeof els.settingsDialog.showModal === 'function') els.settingsDialog.showModal();
+    else els.settingsDialog.setAttribute('open', '');
+  });
+  els.themeSelect.addEventListener('change', async () => {
+    applyTheme(els.themeSelect.value);
+    await setSetting('theme', els.themeSelect.value);
+  });
+  els.exportButton.addEventListener('click', async () => {
+    downloadJson(await exportData());
+    showToast('バックアップを書き出しました');
+  });
+  els.importInput.addEventListener('change', () => {
+    const [file] = els.importInput.files;
+    if (file) handleImport(file);
+  });
+
+  els.tabMemoButton.addEventListener('click', () => showView('library'));
+  els.tabMuseumButton.addEventListener('click', () => showView('museum'));
+  els.aiMascot.addEventListener('click', () => showMascotLine(pickMascotLine()));
+  els.aiMascot.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      showMascotLine(pickMascotLine());
+    }
+  });
+  els.dailyMissionButton.addEventListener('click', handleDailyMissionTap);
+
+  els.selectionCancelButton.addEventListener('click', exitSelectionMode);
+  els.selectionDeleteButton.addEventListener('click', bulkDeleteSelected);
+  els.selectionTagButton.addEventListener('click', openBulkTagDialog);
+  els.bulkTagCloseButton.addEventListener('click', closeBulkTagDialog);
+  els.bulkTagApplyButton.addEventListener('click', applyBulkTags);
+  els.bulkTagDialog.addEventListener('click', (event) => {
+    if (event.target === els.bulkTagDialog) closeBulkTagDialog();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      flushAutosave();
+    } else if (document.visibilityState === 'visible') {
+      reloadNotesFromDb();
+    }
+  });
+}
+
+async function reloadNotesFromDb() {
+  const activeId = state.activeNoteId;
+  state.notes = await listNotes();
+  if (activeId && !state.notes.some((note) => note.id === activeId)) {
+    state.activeNoteId = null;
+    state.expandedNoteId = null;
+  }
+  renderLibrary();
+  if (state.activeTab === 'museum') renderMuseum();
+  else updateMuseumBadge();
+}
+
+async function init() {
+  const theme = await getSetting('theme', 'system');
+  applyTheme(theme);
+  const appTitle = await getSetting('appTitle', 'アイミュージアム');
+  applyAppTitle(appTitle);
+  state.notes = await listNotes();
+
+  state.tagRegistry = await getSetting('tagRegistry', []);
+  state.museumTagOrder = await getSetting('museumTagOrder', []);
+
+  // ゴミ箱に入って30日経ったメモは自動で完全削除する
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const expired = state.notes.filter((note) => note.deletedAt != null && now - note.deletedAt > THIRTY_DAYS_MS);
+  for (const note of expired) {
+    await deleteNotePermanently(note.id);
+  }
+  if (expired.length) {
+    const expiredIds = new Set(expired.map((note) => note.id));
+    state.notes = state.notes.filter((note) => !expiredIds.has(note.id));
+  }
+
+  wireEvents();
+  renderLibrary();
+  showView('library');
+  updateMuseumBadge();
+  handleInitialShareTarget();
+
+  const isNativeApp = Boolean(window.Capacitor?.isNativePlatform?.());
+
+  // ハードウェアの戻るボタンと、Android端末の画面端スワイプ(ジェスチャーナビゲーション)は
+  // どちらもAndroid側では同じ「戻る」操作として扱われ、@capacitor/appのbackButton
+  // イベントに集約される。編集画面などの時はアプリを閉じずにgoBack()、
+  // ホーム(一覧)まで戻っていたら通常通りアプリを終了する。
+  const NativeApp = window.Capacitor?.Plugins?.App;
+  if (NativeApp) {
+    NativeApp.addListener('backButton', () => {
+      if (canGoBackInApp()) goBack();
+      else NativeApp.exitApp();
+    });
+  }
+
+  if (isNativeApp) {
+    // ネイティブアプリはAPK自体に最新のファイルが同梱されているので、
+    // PWA用のservice workerキャッシュは不要かつ有害(更新した画面が古いまま
+    // 表示され続けるバグの原因になる)。既に登録されてしまっている端末のために
+    // 明示的に解除・キャッシュ削除もしておく。
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        for (const reg of regs) reg.unregister();
+      }).catch(() => {});
+    }
+    if ('caches' in window) {
+      caches.keys().then((keys) => Promise.all(keys.map((key) => caches.delete(key)))).catch(() => {});
+    }
+  } else if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    navigator.serviceWorker.register('./sw.js').catch((error) => console.warn('Service worker registration failed', error));
+  }
+}
+
+init().catch((error) => {
+  console.error(error);
+  alert('アプリを起動できませんでした。ブラウザを再読み込みしてください。');
+});
