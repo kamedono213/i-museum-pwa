@@ -82,6 +82,8 @@ const els = {
   trophyDetailCount: $('trophyDetailCount'),
   trophyDetailFirstDate: $('trophyDetailFirstDate'),
   trophyDetailNext: $('trophyDetailNext'),
+  discoveryToast: $('discoveryToast'),
+  discoveryTagName: $('discoveryTagName'),
 };
 
 const state = {
@@ -103,6 +105,7 @@ const state = {
   museumTagOrder: [],
   mascotTimer: null,
   reorderState: null,
+  knownTagKeys: new Set(),
 };
 
 const TAG_COLOR_SWATCHES = [
@@ -894,6 +897,7 @@ async function saveActiveNote() {
   await putNote(note);
   els.saveState.textContent = '保存済み';
   renderLibrary();
+  checkForNewTagDiscoveries(note.tags);
 }
 
 function scheduleAutosave() {
@@ -973,6 +977,7 @@ async function saveQuickCapture() {
   renderLibrary();
   closeQuickCapture();
   showToast('保存しました');
+  checkForNewTagDiscoveries(note.tags);
 }
 
 async function editQuickCapture() {
@@ -1183,6 +1188,18 @@ function nextTierForCount(count) {
   return TROPHY_TIERS.find((tier) => count < tier.threshold) || null;
 }
 
+function tierByKey(key) {
+  return TROPHY_TIERS.find((tier) => tier.key === key) || null;
+}
+
+function tierIndex(key) {
+  return TROPHY_TIERS.findIndex((tier) => tier.key === key);
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function computeTagStats() {
   const active = state.notes.filter((note) => note.deletedAt == null);
   const byKey = new Map(); // lowercased -> { name, count, firstCreatedAt }
@@ -1247,6 +1264,16 @@ function trophyIconMarkup(tierKey) {
   </div>`;
 }
 
+function renderTrophyCardInner(card, tier, count, showNewDot) {
+  card.innerHTML = `
+    ${trophyIconMarkup(tier.key)}
+    ${showNewDot ? '<span class="trophy-new-dot" aria-hidden="true"></span>' : ''}
+    <span class="trophy-tag-name">${escapeHtml(card.dataset.tag)}</span>
+    <span class="trophy-tier-name">${tier.name}</span>
+    <span class="trophy-count">${count}件</span>
+  `;
+}
+
 function renderMuseum() {
   const stats = orderTagStats(computeTagStats());
   els.museumTrophyCount.textContent = stats.length ? `${stats.length}個の展示物` : '';
@@ -1254,29 +1281,65 @@ function renderMuseum() {
   els.trophyShelf.replaceChildren();
 
   for (const stat of stats) {
-    const tier = tierForCount(stat.count);
-    if (!tier) continue;
+    const currentTier = tierForCount(stat.count);
+    if (!currentTier) continue;
     const next = nextTierForCount(stat.count);
+    const seenKey = lastSeenTierFor(stat.name);
+
     const card = document.createElement('button');
     card.type = 'button';
     card.className = 'trophy-card';
     card.dataset.tag = stat.name;
-    const seen = lastSeenTierFor(stat.name);
-    const order = TROPHY_TIERS.map((t) => t.key);
-    const isNew = !seen || order.indexOf(tier.key) > order.indexOf(seen);
-    card.innerHTML = `
-      ${trophyIconMarkup(tier.key)}
-      ${isNew ? '<span class="trophy-new-dot" aria-hidden="true"></span>' : ''}
-      <span class="trophy-tag-name">${escapeHtml(stat.name)}</span>
-      <span class="trophy-tier-name">${tier.name}</span>
-      <span class="trophy-count">${stat.count}件</span>
-    `;
-    card.addEventListener('click', () => openTrophyDetail(stat, tier, next));
     attachTrophyReorder(card, stat.name);
+
+    // 既に見たティアより上がっている(=昇格)場合は、いきなり新しい材質を見せず
+    // 一旦「前のティア」で表示しておき、アイのセリフの後に演出付きで切り替える。
+    if (seenKey && tierIndex(currentTier.key) > tierIndex(seenKey)) {
+      const oldTier = tierByKey(seenKey) || currentTier;
+      renderTrophyCardInner(card, oldTier, stat.count, false);
+      card.dataset.pendingTier = currentTier.key;
+      card.onclick = () => openTrophyDetail(stat, oldTier, TROPHY_TIERS[tierIndex(oldTier.key) + 1] || null);
+    } else {
+      const isNew = !seenKey;
+      renderTrophyCardInner(card, currentTier, stat.count, isNew);
+      if (isNew) markTierSeen(stat.name, currentTier.key);
+      card.onclick = () => openTrophyDetail(stat, currentTier, next);
+    }
+
     els.trophyShelf.append(card);
   }
 
   updateMuseumBadge();
+  playPendingUpgradeEvents();
+}
+
+async function playPendingUpgradeEvents() {
+  const cards = [...els.trophyShelf.querySelectorAll('.trophy-card[data-pending-tier]')];
+  for (const card of cards) {
+    if (!els.trophyShelf.contains(card)) continue; // 途中でミュージアムを離れた場合は打ち切り
+    const tagName = card.dataset.tag;
+    const newTierKey = card.dataset.pendingTier;
+    const newTier = tierByKey(newTierKey);
+    if (!newTier) continue;
+
+    showMascotLine({ text: `「${tagName}」のこと、たくさん調べたね！`, expr: 'happy' });
+    await wait(2200);
+    if (!els.trophyShelf.contains(card)) continue;
+
+    const found = computeTagStats().find((s) => s.name.toLocaleLowerCase() === tagName.toLocaleLowerCase());
+    const stat = found || { name: tagName, count: 0, firstCreatedAt: Date.now() };
+    const count = stat.count;
+    const next = nextTierForCount(count);
+    renderTrophyCardInner(card, newTier, count, false);
+    delete card.dataset.pendingTier;
+    card.onclick = () => openTrophyDetail(stat, newTier, next);
+    card.classList.add('is-upgrading');
+    if (navigator.vibrate) navigator.vibrate([12, 40, 12]);
+    await wait(1000);
+    card.classList.remove('is-upgrading');
+    await markTierSeen(tagName, newTierKey);
+    updateMuseumBadge();
+  }
 }
 
 function escapeHtml(str) {
@@ -1418,6 +1481,36 @@ function scheduleMascotIdleLoop() {
 function stopMascotIdleLoop() {
   clearTimeout(state.mascotTimer);
   state.mascotTimer = null;
+}
+
+// ---- 新発見トースト(メモ画面で初めて使うタグを保存した瞬間に出す) ----
+
+async function showDiscoveryToast(tagName) {
+  await markTierSeen(tagName, 'wood');
+  els.discoveryTagName.textContent = `「${tagName}」`;
+  els.discoveryToast.hidden = false;
+  els.discoveryToast.classList.remove('is-leaving');
+  if (navigator.vibrate) navigator.vibrate([10, 30, 10]);
+  await wait(2200);
+  els.discoveryToast.classList.add('is-leaving');
+  await wait(350);
+  els.discoveryToast.hidden = true;
+  els.discoveryToast.classList.remove('is-leaving');
+}
+
+let discoveryChain = Promise.resolve();
+function checkForNewTagDiscoveries(tags) {
+  const newOnes = [];
+  for (const raw of normalizeTags(tags)) {
+    const key = raw.toLocaleLowerCase();
+    if (!state.knownTagKeys.has(key)) {
+      state.knownTagKeys.add(key);
+      newOnes.push(raw);
+    }
+  }
+  for (const tag of newOnes) {
+    discoveryChain = discoveryChain.then(() => showDiscoveryToast(tag));
+  }
 }
 
 // ---- デイリーミッション ----
@@ -1659,6 +1752,7 @@ async function init() {
 
   state.tagRegistry = await getSetting('tagRegistry', []);
   state.museumTagOrder = await getSetting('museumTagOrder', []);
+  state.knownTagKeys = new Set(computeTagStats().map((s) => s.name.toLocaleLowerCase()));
 
   // ゴミ箱に入って30日経ったメモは自動で完全削除する
   const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
