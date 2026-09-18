@@ -226,6 +226,17 @@
       </div>
 
       <div class="settings-block">
+        <strong>アカウント</strong>
+        <p id="authStatusText" class="muted">未ログインです。ログインすると、端末を変えても知識をクラウドから復元できます。</p>
+        <button id="signInButton" class="primary-btn" type="button">Googleアカウントでログイン</button>
+        <div id="accountInfo" class="account-info" hidden>
+          <div id="accountEmail" class="muted"></div>
+          <div id="syncStatusText" class="muted"></div>
+          <button id="signOutButton" class="secondary-btn" type="button">ログアウト</button>
+        </div>
+      </div>
+
+      <div class="settings-block">
         <strong>バックアップ</strong>
         <p class="muted">全メモ・タグ・画像・設定を1つのJSONファイルに保存します。</p>
         <div class="backup-actions">

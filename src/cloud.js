@@ -1,0 +1,130 @@
+// Thin wrapper around the Firebase Web SDK (loaded straight from the CDN as
+// ES modules, so no bundler/build step is required for this static site).
+import { firebaseConfig } from './firebase-config.js';
+
+const SDK_VERSION = '10.14.1';
+const CDN_BASE = `https://www.gstatic.com/firebasejs/${SDK_VERSION}`;
+
+const [{ initializeApp }, authSdk, firestoreSdk] = await Promise.all([
+  import(`${CDN_BASE}/firebase-app.js`),
+  import(`${CDN_BASE}/firebase-auth.js`),
+  import(`${CDN_BASE}/firebase-firestore.js`),
+]);
+
+const {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  signInWithCredential,
+  getRedirectResult,
+  signOut,
+  onAuthStateChanged,
+} = authSdk;
+
+const {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  collection,
+  doc,
+  setDoc,
+  deleteDoc,
+  getDocs,
+  onSnapshot,
+} = firestoreSdk;
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const provider = new GoogleAuthProvider();
+
+// Firestore's own offline cache handles queued writes and cached reads while
+// offline, so we lean on it instead of hand-rolling a write queue.
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+});
+
+export function watchAuthState(callback) {
+  return onAuthStateChanged(auth, callback);
+}
+
+export function getCurrentUser() {
+  return auth.currentUser;
+}
+
+export async function signInWithGoogle() {
+  // ネイティブアプリ(Capacitor)内のWebViewはGoogleにOAuth用途を許可されていない
+  // ("disallowed_useragent")ため、popup/redirectのWeb方式は失敗する。
+  // @capacitor-firebase/authenticationのネイティブGoogleサインインを使い、
+  // 結果のIDトークンでこのFirebase JS SDKのAuth状態にも反映させる。
+  const nativeAuth = window.Capacitor?.Plugins?.FirebaseAuthentication;
+  if (nativeAuth) {
+    const result = await nativeAuth.signInWithGoogle();
+    const idToken = result?.credential?.idToken;
+    if (!idToken) throw new Error('Google sign-in did not return an ID token');
+    const credential = GoogleAuthProvider.credential(idToken);
+    await signInWithCredential(auth, credential);
+    return;
+  }
+
+  try {
+    await signInWithPopup(auth, provider);
+  } catch (error) {
+    const popupIssue = [
+      'auth/popup-blocked',
+      'auth/popup-closed-by-user',
+      'auth/cancelled-popup-request',
+      'auth/operation-not-supported-in-this-environment',
+    ].includes(error?.code);
+    if (!popupIssue) throw error;
+    // Installed PWAs / some mobile browsers don't support popups reliably.
+    await signInWithRedirect(auth, provider);
+  }
+}
+
+export async function completeRedirectSignIn() {
+  try {
+    await getRedirectResult(auth);
+  } catch (error) {
+    console.warn('Google redirect sign-in failed', error);
+  }
+}
+
+export async function signOutOfGoogle() {
+  const nativeAuth = window.Capacitor?.Plugins?.FirebaseAuthentication;
+  if (nativeAuth) await nativeAuth.signOut();
+  await signOut(auth);
+}
+
+function notesCollection(uid) {
+  return collection(db, 'users', uid, 'i-museum-notes');
+}
+
+export async function fetchCloudNotesOnce(uid) {
+  const snapshot = await getDocs(notesCollection(uid));
+  return snapshot.docs.map((docSnap) => docSnap.data());
+}
+
+export function subscribeToCloudNotes(uid, onChange, onError) {
+  return onSnapshot(
+    notesCollection(uid),
+    { includeMetadataChanges: true },
+    (snapshot) => {
+      const notes = snapshot.docs.map((docSnap) => docSnap.data());
+      onChange(notes, {
+        fromCache: snapshot.metadata.fromCache,
+        hasPendingWrites: snapshot.metadata.hasPendingWrites,
+      });
+    },
+    onError,
+  );
+}
+
+export function writeCloudNote(uid, note) {
+  const { attachments, ...cloudNote } = note;
+  return setDoc(doc(notesCollection(uid), note.id), cloudNote);
+}
+
+export function deleteCloudNote(uid, id) {
+  return deleteDoc(doc(notesCollection(uid), id));
+}

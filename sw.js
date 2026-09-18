@@ -1,4 +1,4 @@
-const CACHE_NAME = 'i-museum-v1';
+const CACHE_NAME = 'i-museum-v2';
 const APP_SHELL = [
   './',
   './index.html',
@@ -7,6 +7,9 @@ const APP_SHELL = [
   './src/db.js',
   './src/model.js',
   './src/share.js',
+  './src/cloud.js',
+  './src/cloud-sync.js',
+  './src/firebase-config.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
