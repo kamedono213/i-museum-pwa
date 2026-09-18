@@ -112,14 +112,25 @@
           <h2>トロフィー棚</h2>
           <span id="museumTrophyCount" class="muted"></span>
         </div>
-        <div id="trophyShelf" class="trophy-shelf"></div>
-        <div id="museumEmptyState" class="empty-state" hidden>
-          <div class="empty-icon">✦</div>
-          <strong>まだ展示物がありません</strong>
-          <span>「メモ」タブでタグをつけて知識を記録すると、ここにトロフィーが並びます。</span>
+        <div class="shelf-panel">
+          <div class="shelf-panel-glow" aria-hidden="true"></div>
+          <div id="trophyShelf" class="trophy-shelf"></div>
+          <div id="museumEmptyState" class="empty-state" hidden>
+            <div class="empty-icon">✦</div>
+            <strong>まだ展示物がありません</strong>
+            <span>「メモ」タブでタグをつけて知識を記録すると、ここにトロフィーが並びます。</span>
+          </div>
         </div>
       </section>
     </main>
+
+    <div id="discoveryToast" class="discovery-toast" hidden>
+      <div class="discovery-puffs" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="discovery-text">
+        <strong>新発見！</strong>
+        <span id="discoveryTagName"></span>
+      </div>
+    </div>
 
     <nav class="tab-bar" aria-label="画面切り替え">
       <button id="tabMemoButton" class="tab-btn is-active" type="button" data-tab="library">
