@@ -86,11 +86,19 @@
     <main id="museumView" class="view museum-view" hidden aria-label="ミュージアム">
       <section class="museum-hero">
         <div class="star-field" aria-hidden="true"></div>
-        <div id="aiMascot" class="ai-mascot" role="button" tabindex="0" aria-label="アイに話しかける">
+        <div id="aiMascot" class="ai-mascot" data-expr="idle" role="button" tabindex="0" aria-label="アイに話しかける">
           <div id="aiSpeechBubble" class="ai-speech-bubble" hidden></div>
-          <div class="ai-body">
-            <div class="ai-eye ai-eye-l"></div>
-            <div class="ai-eye ai-eye-r"></div>
+          <div class="ai-shadow" aria-hidden="true"></div>
+          <div class="ai-robot" aria-hidden="true">
+            <div class="ai-antenna"><span></span></div>
+            <div class="ai-body">
+              <div class="ai-visor">
+                <div class="ai-eye ai-eye-l"></div>
+                <div class="ai-eye ai-eye-r"></div>
+              </div>
+            </div>
+            <div class="ai-foot ai-foot-l"></div>
+            <div class="ai-foot ai-foot-r"></div>
           </div>
         </div>
         <button id="dailyMissionButton" class="daily-mission-btn" type="button">
