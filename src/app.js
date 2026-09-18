@@ -73,8 +73,7 @@ const els = {
   museumTrophyCount: $('museumTrophyCount'),
   aiMascot: $('aiMascot'),
   aiSpeechBubble: $('aiSpeechBubble'),
-  dailyMissionButton: $('dailyMissionButton'),
-  dailyMissionText: $('dailyMissionText'),
+  dailyQuestionList: $('dailyQuestionList'),
   trophyDetailDialog: $('trophyDetailDialog'),
   trophyDetailTier: $('trophyDetailTier'),
   trophyDetailName: $('trophyDetailName'),
@@ -1275,6 +1274,7 @@ function renderTrophyCardInner(card, tier, count, showNewDot) {
 }
 
 function renderMuseum() {
+  loadDailyQuestions();
   const stats = orderTagStats(computeTagStats());
   els.museumTrophyCount.textContent = stats.length ? `${stats.length}個の展示物` : '';
   els.museumEmptyState.hidden = stats.length > 0;
@@ -1513,48 +1513,80 @@ function checkForNewTagDiscoveries(tags) {
   }
 }
 
-// ---- デイリーミッション ----
+// ---- きょうの3つの？ ----
+// アイは先生ではなく、一緒に「なんだこれ？」を楽しむ相棒という設定。
+// 正解を教える/評価するのではなく、次に見てみたくなる問いをそっと3つ置いておく。
 
-const MISSION_FALLBACKS = [
+const QUESTION_FALLBACKS = [
   '空はどうして青いの？',
-  '生き物と乗り物、どっちが速く進化した？',
-  '一番好きな食べ物は、どこの国で生まれたんだろう？',
-  '今日見た乗り物や生き物で、気になったものはあった？',
+  '生き物と乗り物、どっちが速く進化したんだろう？',
+  '一番好きな食べ物は、どこの国で生まれたのかな？',
+  '今日見たものの中で、ちょっと気になったものはあった？',
   '「もし〇〇じゃなかったら」を1つ考えてみよう',
+  'いちばん最近調べたことと、似ているものは他にあるかな？',
+  '知ってることを1つ、誰かに説明するとしたら？',
 ];
 
-function generateMissionText() {
+function generateDailyQuestions() {
   const stats = computeTagStats();
+  const picks = [];
   if (stats.length) {
-    const weakest = [...stats].sort((a, b) => a.count - b.count)[0];
-    const prompts = [
-      `「${weakest.name}」についてもっと調べてみない？`,
-      `「${weakest.name}」に関係あることを、あと1つ見つけてみよう。`,
-    ];
-    if (Math.random() < 0.4) return MISSION_FALLBACKS[Math.floor(Math.random() * MISSION_FALLBACKS.length)];
-    return prompts[Math.floor(Math.random() * prompts.length)];
+    const weakest = [...stats].sort((a, b) => a.count - b.count).slice(0, 2);
+    for (const w of weakest) {
+      picks.push(`「${w.name}」に関係あることを、あと1つ見つけてみよう。`);
+    }
   }
-  return MISSION_FALLBACKS[Math.floor(Math.random() * MISSION_FALLBACKS.length)];
+  const pool = [...QUESTION_FALLBACKS];
+  while (picks.length < 3 && pool.length) {
+    const idx = Math.floor(Math.random() * pool.length);
+    picks.push(pool.splice(idx, 1)[0]);
+  }
+  return picks.slice(0, 3);
 }
 
-async function handleDailyMissionTap() {
+async function loadDailyQuestions() {
   const today = new Date().toISOString().slice(0, 10);
-  let mission = await getSetting('dailyMission', null);
-  if (!mission || mission.date !== today) {
-    mission = { date: today, text: generateMissionText() };
-    await setSetting('dailyMission', mission);
+  let record = await getSetting('dailyQuestions', null);
+  if (!record || record.date !== today) {
+    record = { date: today, questions: generateDailyQuestions() };
+    await setSetting('dailyQuestions', record);
   }
-  els.dailyMissionText.textContent = mission.text;
-  showMascotLine({ text: mission.text, expr: 'curious' });
+  els.dailyQuestionList.replaceChildren();
+  for (const q of record.questions) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'dm-question';
+    btn.innerHTML = `<span class="dm-question-mark">？</span><span>${escapeHtml(q)}</span>`;
+    btn.addEventListener('click', () => showMascotLine({ text: q, expr: 'curious' }));
+    els.dailyQuestionList.append(btn);
+  }
 }
 
-function downloadJson(data) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+// モバイルのブラウザ環境によってはBlobの<a download>が無視されることがある。
+// Web Share API(ファイル共有)が使える場合はそちらを優先し、使えない場合
+// (デスクトップブラウザ等)は従来のダウンロード方式にフォールバックする。
+async function downloadJson(data) {
+  const date = new Date().toISOString().slice(0, 10);
+  const filename = `knowledge-backup-${date}.json`;
+  const text = JSON.stringify(data, null, 2);
+
+  if (navigator.canShare && navigator.share) {
+    try {
+      const file = new File([text], filename, { type: 'application/json' });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: filename });
+        return;
+      }
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+    }
+  }
+
+  const blob = new Blob([text], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const date = new Date().toISOString().slice(0, 10);
   a.href = url;
-  a.download = `knowledge-backup-${date}.json`;
+  a.download = filename;
   document.body.append(a);
   a.click();
   a.remove();
@@ -1694,7 +1726,7 @@ function wireEvents() {
     await setSetting('theme', els.themeSelect.value);
   });
   els.exportButton.addEventListener('click', async () => {
-    downloadJson(await exportData());
+    await downloadJson(await exportData());
     showToast('バックアップを書き出しました');
   });
   els.importInput.addEventListener('change', () => {
@@ -1711,7 +1743,6 @@ function wireEvents() {
       showMascotLine(pickMascotLine());
     }
   });
-  els.dailyMissionButton.addEventListener('click', handleDailyMissionTap);
 
   els.selectionCancelButton.addEventListener('click', exitSelectionMode);
   els.selectionDeleteButton.addEventListener('click', bulkDeleteSelected);
