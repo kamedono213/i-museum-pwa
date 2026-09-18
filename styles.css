@@ -365,34 +365,81 @@ button { cursor: pointer; }
     radial-gradient(1.5px 1.5px at 8% 80%, #fff, transparent);
 }
 .ai-mascot {
-  position: relative; z-index: 1; width: 96px; height: 96px; margin: 4px auto 8px; cursor: pointer;
-  animation: mascot-float 3.6s ease-in-out infinite;
+  position: relative; z-index: 1; width: 108px; height: 118px; margin: 8px auto 10px; cursor: pointer;
 }
 .ai-mascot:focus-visible { outline: 2px solid #fff; outline-offset: 4px; border-radius: 999px; }
+.ai-shadow {
+  position: absolute; left: 50%; bottom: 4px; width: 58px; height: 12px; transform: translateX(-50%);
+  background: radial-gradient(ellipse at center, rgba(0,0,0,.4), transparent 70%);
+  animation: mascot-shadow 3.2s ease-in-out infinite;
+}
+@keyframes mascot-shadow {
+  0%, 100% { transform: translateX(-50%) scale(1); opacity: .55; }
+  50% { transform: translateX(-50%) scale(.72); opacity: .3; }
+}
+.ai-robot {
+  position: absolute; inset: 0 0 12px; animation: mascot-float 3.2s ease-in-out infinite;
+}
 @keyframes mascot-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-10px); }
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-12px) rotate(-2deg); }
+}
+.ai-antenna {
+  position: absolute; top: -14px; left: 50%; width: 4px; height: 16px; transform: translateX(-50%);
+  background: linear-gradient(#f6dfae, #e0b978); border-radius: 999px; transform-origin: bottom center;
+  transition: transform .25s ease;
+}
+.ai-antenna span {
+  position: absolute; top: -7px; left: 50%; width: 9px; height: 9px; transform: translateX(-50%);
+  border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff6e4, #ffd68a 70%, #f0b95e);
+  box-shadow: 0 0 8px 2px rgba(255, 214, 138, .65);
+  transition: box-shadow .25s ease, transform .25s ease;
 }
 .ai-body {
-  width: 100%; height: 100%; border-radius: 46% 46% 50% 50% / 54% 54% 46% 46%;
-  background: radial-gradient(circle at 32% 28%, #efe6ff, #b388ff 55%, #7c4dff 100%);
-  box-shadow: 0 10px 28px rgba(124, 77, 255, .45), inset 0 -8px 14px rgba(36, 16, 90, .25);
+  position: absolute; left: 50%; bottom: 6px; width: 92px; height: 92px; transform: translateX(-50%);
+  border-radius: 50% 50% 46% 46% / 58% 58% 42% 42%;
+  background: radial-gradient(circle at 32% 26%, #fff8e8, #f5e2b8 55%, #e3c58e 100%);
+  box-shadow: 0 12px 26px rgba(20, 10, 50, .4), inset 0 -10px 16px rgba(200, 160, 100, .35);
+}
+.ai-visor {
+  position: absolute; left: 50%; top: 40%; width: 62%; height: 30%; transform: translate(-50%, -50%);
+  background: linear-gradient(180deg, #372c52, #241b39);
+  border-radius: 999px; box-shadow: inset 0 2px 4px rgba(0,0,0,.4);
   display: flex; align-items: center; justify-content: center; gap: 14px;
 }
 .ai-eye {
-  width: 10px; height: 14px; border-radius: 50%; background: #241b4d;
-  animation: mascot-blink 4.2s ease-in-out infinite;
+  width: 9px; height: 13px; border-radius: 5px; background: #ffe6ad;
+  box-shadow: 0 0 7px 1.5px rgba(255, 230, 173, .85);
+  animation: mascot-blink 4.4s ease-in-out infinite;
+  transition: width .2s ease, height .2s ease, border-radius .2s ease, transform .2s ease;
 }
 .ai-eye-r { animation-delay: .15s; }
 @keyframes mascot-blink {
   0%, 92%, 100% { transform: scaleY(1); }
   95% { transform: scaleY(.15); }
 }
-.ai-mascot.is-talking .ai-body { animation: mascot-bounce .5s ease; }
+.ai-foot {
+  position: absolute; bottom: 2px; width: 20px; height: 11px; border-radius: 50%;
+  background: linear-gradient(#e3c58e, #cfa964);
+}
+.ai-foot-l { left: 22px; }
+.ai-foot-r { right: 22px; }
+
+/* 表情差分(タップ/セリフに合わせてJSがdata-exprを切り替える) */
+.ai-mascot[data-expr="happy"] .ai-eye {
+  width: 13px; height: 6px; border-radius: 6px 6px 0 0; transform: translateY(3px);
+}
+.ai-mascot[data-expr="happy"] .ai-antenna span { transform: translateX(-50%) scale(1.25); box-shadow: 0 0 12px 3px rgba(255, 214, 138, .85); }
+.ai-mascot[data-expr="surprised"] .ai-eye { width: 14px; height: 14px; border-radius: 50%; }
+.ai-mascot[data-expr="surprised"] .ai-antenna { transform: translateX(-50%) scaleY(1.15); }
+.ai-mascot[data-expr="curious"] .ai-eye-r { transform: translateY(-3px) scale(1.15); }
+.ai-mascot[data-expr="curious"] .ai-antenna { transform: translateX(-50%) rotate(-12deg); }
+
+.ai-mascot.is-talking .ai-robot { animation: mascot-bounce .5s ease; }
 @keyframes mascot-bounce {
   0%, 100% { transform: scale(1); }
-  40% { transform: scale(1.08, .92); }
-  70% { transform: scale(.96, 1.05); }
+  40% { transform: scale(1.06, .94); }
+  70% { transform: scale(.97, 1.04); }
 }
 .ai-speech-bubble {
   position: absolute; z-index: 2; left: 50%; bottom: 100%; transform: translateX(-50%);

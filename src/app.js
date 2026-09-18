@@ -1367,32 +1367,43 @@ function pickMascotLine() {
   const lines = [];
 
   if (!active.length) {
-    lines.push('まだ何も知らないや。何か調べてみようよ！', 'ねえねえ、気になることある？');
+    lines.push(
+      { text: 'まだ何も知らないや。何か調べてみようよ！', expr: 'curious' },
+      { text: 'ねえねえ、気になることある？', expr: 'curious' },
+    );
   } else {
     const recent = [...active].sort((a, b) => b.createdAt - a.createdAt)[0];
-    if (recent?.title) lines.push(`この前「${recent.title}」について調べてたね！`);
+    if (recent?.title) lines.push({ text: `この前「${recent.title}」について調べてたね！`, expr: 'happy' });
     if (stats.length) {
       const top = [...stats].sort((a, b) => b.count - a.count)[0];
-      lines.push(`「${top.name}」のことが${top.count}個もたまってるね！`);
+      lines.push({ text: `「${top.name}」のことが${top.count}個もたまってるね！`, expr: 'happy' });
       const closest = stats
         .map((s) => ({ s, next: nextTierForCount(s.count) }))
         .filter((x) => x.next)
         .sort((a, b) => (a.next.threshold - a.s.count) - (b.next.threshold - b.s.count))[0];
-      if (closest) lines.push(`「${closest.s.name}」、あと${closest.next.threshold - closest.s.count}件で${closest.next.name}トロフィーだよ！`);
+      if (closest) {
+        lines.push({
+          text: `「${closest.s.name}」、あと${closest.next.threshold - closest.s.count}件で${closest.next.name}トロフィーだよ！`,
+          expr: 'surprised',
+        });
+      }
     }
-    lines.push('博物館、少しずつ大きくなってきたね。');
+    lines.push({ text: '博物館、少しずつ大きくなってきたね。', expr: 'happy' });
   }
   return lines[Math.floor(Math.random() * lines.length)];
 }
 
-function showMascotLine(text) {
+function showMascotLine(line) {
+  const { text, expr } = typeof line === 'string' ? { text: line, expr: 'happy' } : line;
   els.aiSpeechBubble.textContent = text;
   els.aiSpeechBubble.hidden = false;
   els.aiMascot.classList.add('is-talking');
+  els.aiMascot.dataset.expr = expr || 'happy';
   clearTimeout(state.mascotBubbleTimer);
   state.mascotBubbleTimer = setTimeout(() => {
     els.aiSpeechBubble.hidden = true;
     els.aiMascot.classList.remove('is-talking');
+    els.aiMascot.dataset.expr = 'idle';
   }, 5000);
 }
 
@@ -1441,7 +1452,7 @@ async function handleDailyMissionTap() {
     await setSetting('dailyMission', mission);
   }
   els.dailyMissionText.textContent = mission.text;
-  showMascotLine(mission.text);
+  showMascotLine({ text: mission.text, expr: 'curious' });
 }
 
 function downloadJson(data) {
