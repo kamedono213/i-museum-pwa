@@ -6,9 +6,14 @@ import {
   setSetting,
   exportData,
   importData,
+} from './db.js';
+import {
   putNote,
   deleteNotePermanently,
-} from './db.js';
+  initCloudSync,
+  signIn,
+  signOutCloud,
+} from './cloud-sync.js';
 
 const $ = (id) => document.getElementById(id);
 const DEFAULT_APP_TITLE = 'アイミュージアム';
@@ -54,6 +59,12 @@ const els = {
   exportButton: $('exportButton'),
   importInput: $('importInput'),
   toast: $('toast'),
+  authStatusText: $('authStatusText'),
+  signInButton: $('signInButton'),
+  accountInfo: $('accountInfo'),
+  accountEmail: $('accountEmail'),
+  syncStatusText: $('syncStatusText'),
+  signOutButton: $('signOutButton'),
   selectionBar: $('selectionBar'),
   selectionCount: $('selectionCount'),
   selectionTagButton: $('selectionTagButton'),
@@ -1593,6 +1604,36 @@ async function downloadJson(data) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function updateAuthUI(user) {
+  const signedIn = Boolean(user);
+  els.signInButton.hidden = signedIn;
+  els.accountInfo.hidden = !signedIn;
+  els.authStatusText.hidden = signedIn;
+  if (signedIn) {
+    els.accountEmail.textContent = user.email || user.displayName || 'ログイン済み';
+  }
+}
+
+const SYNC_STATUS_LABELS = {
+  'signed-out': '',
+  syncing: '同期中…',
+  synced: '同期済み',
+  offline: 'オフライン(復帰時に同期します)',
+  error: '同期エラー(このままローカルには保存されています)',
+};
+
+function updateSyncStatusUI(status) {
+  els.syncStatusText.textContent = SYNC_STATUS_LABELS[status] ?? '';
+}
+
+async function refreshNotesFromCloud() {
+  state.notes = await listNotes();
+  renderLibrary();
+  if (!els.trashView.hidden) renderTrash();
+  if (state.activeTab === 'museum') renderMuseum();
+  else updateMuseumBadge();
+}
+
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   els.themeSelect.value = theme;
@@ -1734,6 +1775,20 @@ function wireEvents() {
     if (file) handleImport(file);
   });
 
+  els.signInButton.addEventListener('click', async () => {
+    try {
+      await signIn();
+    } catch (error) {
+      console.error(error);
+      const detail = error?.code || error?.message || String(error);
+      alert(`ログインできませんでした:\n${detail}`);
+    }
+  });
+  els.signOutButton.addEventListener('click', async () => {
+    await signOutCloud();
+    showToast('ログアウトしました');
+  });
+
   els.tabMemoButton.addEventListener('click', () => showView('library'));
   els.tabMuseumButton.addEventListener('click', () => showView('museum'));
   els.aiMascot.addEventListener('click', () => showMascotLine(pickMascotLine()));
@@ -1802,6 +1857,12 @@ async function init() {
   showView('library');
   updateMuseumBadge();
   handleInitialShareTarget();
+
+  initCloudSync({
+    onNotesChanged: refreshNotesFromCloud,
+    onStatusChange: updateSyncStatusUI,
+    onAuthChanged: updateAuthUI,
+  });
 
   const isNativeApp = Boolean(window.Capacitor?.isNativePlatform?.());
 
