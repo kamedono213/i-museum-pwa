@@ -489,31 +489,35 @@ button { cursor: pointer; }
 .discovery-text strong { font-size: .92rem; font-weight: 900; color: #ffe6ad; }
 .discovery-text span { font-size: .78rem; font-weight: 700; opacity: .9; }
 
-.daily-mission-btn {
-  position: relative; z-index: 1; display: flex; flex-direction: column; gap: 3px;
+.daily-questions {
+  position: relative; z-index: 1; display: flex; flex-direction: column; gap: 6px;
   width: 100%; margin-top: 6px; border: 1px solid rgba(255,255,255,.22); border-radius: 16px;
   background: rgba(255,255,255,.1); backdrop-filter: blur(4px);
-  padding: 11px 16px; text-align: left; color: #f2eeff;
+  padding: 11px 14px 13px; color: #f2eeff;
 }
-.daily-mission-btn:active { transform: scale(.99); }
 .dm-label { font-size: .68rem; font-weight: 800; letter-spacing: .1em; color: #d9c9ff; }
-.dm-text { font-size: .92rem; font-weight: 750; line-height: 1.5; }
+.dm-list { display: flex; flex-direction: column; gap: 6px; }
+.dm-question {
+  display: flex; align-items: flex-start; gap: 8px; width: 100%; min-width: 0; border: 0; border-radius: 11px;
+  background: rgba(255,255,255,.06); color: #f2eeff; padding: 8px 10px; text-align: left;
+  font-size: .84rem; font-weight: 700; line-height: 1.45;
+}
+.dm-question:active { background: rgba(255,255,255,.16); transform: scale(.99); }
+.dm-question-mark { flex: 0 0 auto; color: #ffe6ad; font-weight: 900; }
+.dm-question > span:last-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
 .museum-shelf-section { margin-top: 4px; }
 .museum-shelf-title { display: flex; align-items: baseline; justify-content: space-between; margin: 0 2px 10px; }
 .museum-shelf-title h2 { margin: 0; font-size: 1.1rem; letter-spacing: -.02em; }
 
+/* トロフィー棚は「夜のミュージアム」として常にダーク系の壁面演出で統一する
+   (ミュージアムヒーロー/アイと同じ方針。テーマ設定(ライト/システム)に関わらず一定)。 */
 .shelf-panel {
   position: relative; overflow: hidden; border-radius: 20px; padding: 20px 12px 16px;
   background:
     repeating-linear-gradient(90deg, rgba(255,255,255,.02) 0 1px, transparent 1px 64px),
     linear-gradient(180deg, #2a2158 0%, #1c1640 55%, #150f30 100%);
   box-shadow: inset 0 2px 0 rgba(255,255,255,.05), inset 0 -18px 30px rgba(0,0,0,.35), 0 10px 24px rgba(10,5,30,.35);
-}
-html:not([data-theme="dark"]) .shelf-panel {
-  background:
-    repeating-linear-gradient(90deg, rgba(0,0,0,.02) 0 1px, transparent 1px 64px),
-    linear-gradient(180deg, #ece6ff 0%, #ddd3fb 60%, #cfc0f7 100%);
 }
 .shelf-panel-glow {
   position: absolute; top: -30%; left: 50%; width: 140%; height: 60%; transform: translateX(-50%);
@@ -530,7 +534,6 @@ html:not([data-theme="dark"]) .shelf-panel {
   color: #f2eeff;
   transition: transform .12s ease, box-shadow .3s ease;
 }
-html:not([data-theme="dark"]) .trophy-card { color: var(--text); }
 .trophy-card:active { transform: scale(.96); }
 .trophy-card.is-dragging { opacity: .55; transform: scale(1.04); }
 .trophy-tag-name { font-size: .82rem; font-weight: 800; overflow-wrap: anywhere; line-height: 1.3; }
